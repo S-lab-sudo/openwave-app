@@ -14,7 +14,7 @@ export async function GET() {
 
         const files = fs.readdirSync(downloadsPath);
         // Supports more formats including standard yt-dlp defaults
-        const musicFiles = files.filter(file =>
+        const musicFiles = files.filter((file: string) =>
             ['.mp3', '.m4a', '.wav', '.flac', '.webm', '.opus'].includes(path.extname(file).toLowerCase())
         );
 

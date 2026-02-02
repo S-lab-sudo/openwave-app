@@ -41,7 +41,7 @@ async function runYtDlp(args: string[], type: string): Promise<any[]> {
 
             try {
                 const lines = output.trim().split('\n');
-                const tracks = lines.map(line => {
+                const tracks = lines.map((line: any) => {
                     if (!line.trim()) return null;
                     try {
                         const json = JSON.parse(line);
@@ -167,7 +167,7 @@ export async function GET(request: Request) {
                             ];
                             const tracks = await runYtDlp(hitArgs, 'search');
 
-                            const bestMatch = tracks.find(t => {
+                            const bestMatch = tracks.find((t: any) => {
                                 const titleLower = t.title.toLowerCase();
                                 const songLower = song.song.toLowerCase();
                                 const artistLower = song.artist.toLowerCase();

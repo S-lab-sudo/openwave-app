@@ -55,7 +55,7 @@ export async function GET(request: Request) {
 
 // Helper to keep the main GET clean
 function formatPlaylists(data: any[]) {
-    return (data || []).map(p => ({
+    return (data || []).map((p: any) => ({
         id: p.id,
         title: p.title,
         description: p.description || '',

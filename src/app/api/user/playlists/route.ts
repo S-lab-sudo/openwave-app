@@ -24,7 +24,7 @@ export async function GET(request: Request) {
         if (pError) throw pError;
 
         // Formatter: Convert DB structure back to app's DynamicPlaylist format
-        const formatted = (playlists || []).map(p => ({
+        const formatted = (playlists || []).map((p: any) => ({
             id: p.id,
             title: p.name,
             description: p.description || '',

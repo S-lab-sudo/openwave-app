@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, Grid, List, Heart, Clock, Zap, Bell, Music, User, HelpCircle, LogOut, ChevronRight, Share2, ShieldCheck, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,9 +15,42 @@ import { TrackRow } from '@/components/playlist/TrackRow';
 export default function ProfilePage() {
     const { user, guestId } = useAuthStore();
     const { likedPlaylists, userPlaylists } = useContentStore();
-    const { history, playTrack } = usePlayerStore();
+    const { history, playTrack, setHistory } = usePlayerStore();
     const [activeTab, setActiveTab] = useState('liked');
     const [prevTab, setPrevTab] = useState('liked');
+
+    // SYNC: Fetch cloud history on mount
+    useEffect(() => {
+        if (!user && !guestId) return;
+
+        const fetchCloudHistory = async () => {
+            try {
+                const params = new URLSearchParams();
+                if (user?.id) params.append('userId', user.id);
+                if (guestId) params.append('guestId', guestId || '');
+
+                const res = await fetch(`/api/user/history?${params.toString()}`);
+                const data = await res.json();
+
+                if (data.history && data.history.length > 0) {
+                    // Update global store with cloud history
+                    // We merge and deduplicate
+                    const cloudHistory = data.history;
+                    const localHistory = usePlayerStore.getState().history;
+
+                    const combinedHistory = [...cloudHistory, ...localHistory.filter((h: any) =>
+                        !cloudHistory.some((ch: any) => ch.id === h.id)
+                    )].slice(0, 50);
+
+                    setHistory(combinedHistory);
+                }
+            } catch (err) {
+                console.error('Failed to sync cloud history', err);
+            }
+        };
+
+        fetchCloudHistory();
+    }, [user?.id, guestId, setHistory]);
 
     const displayName = user?.user_metadata?.full_name || 'Listener';
     const isGuest = !user;

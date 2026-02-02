@@ -40,6 +40,7 @@ interface PlayerState {
     prevTrack: () => void;
     addToQueue: (track: Track) => void;
     setQueue: (tracks: Track[]) => void;
+    setHistory: (tracks: Track[]) => void;
 }
 
 export const usePlayerStore = create<PlayerState>()(
@@ -84,6 +85,21 @@ export const usePlayerStore = create<PlayerState>()(
 
                 // Add to history (deduplicate and put at front)
                 const newHistory = [activeTrack, ...history.filter(t => t.id !== activeTrack.id)].slice(0, 50);
+
+                // FIRE AND FORGET: Sync to database
+                const authState = (window as any).__USE_AUTH_STORE__?.getState() || {};
+                // Note: In a real app we'd import useAuthStore, but for this context we use getState
+                import('@/store/useAuthStore').then(m => {
+                    const { user, guestId } = m.useAuthStore.getState();
+                    fetch('/api/taste/log', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            track: activeTrack,
+                            userId: user?.id,
+                            guestId: guestId
+                        })
+                    }).catch(err => console.error('History sync failed', err));
+                });
 
                 if (context && context.length > 0) {
                     // Seed the queue with the playlist context
@@ -157,6 +173,7 @@ export const usePlayerStore = create<PlayerState>()(
             },
             addToQueue: (track) => set((state) => ({ queue: [...state.queue, track] })),
             setQueue: (tracks) => set({ queue: tracks }),
+            setHistory: (tracks) => set({ history: tracks }),
         }),
         {
             name: 'openwave-player-storage',

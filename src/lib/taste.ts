@@ -40,38 +40,65 @@ export function estimateSongVector(track: { title: string, artist: string }): nu
 /**
  * LOG PLAY: The heartbeat of the recommendation engine.
  */
-export async function logPlay(track: { id: string, title: string, artist: string, thumbnail?: string }) {
+export async function logPlay(
+    track: { id: string, title: string, artist: string, thumbnail?: string },
+    userId?: string,
+    guestId?: string
+) {
     try {
         const songVector = estimateSongVector(track);
 
         // 1. Sync to Supabase Primary Brain (Item Tower)
-        // Safety check: Skip if placeholders are still present
-        if (process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('your-project')) {
-            console.log('Taste Engine: Supabase setup pending. Skipping vector sync.');
-        } else {
+        if (!process.env.NEXT_PUBLIC_SUPABASE_URL?.includes('your-project')) {
             try {
+                // Upsert global track info
                 await supabaseAdmin.from('tracks').upsert({
-                    spotify_id: track.id,
+                    track_id: track.id,
                     title: track.title,
                     artist: track.artist,
                     thumbnail_url: track.thumbnail,
                     embedding_12d: `[${songVector.join(',')}]`,
                     created_at: new Date().toISOString()
-                }, { onConflict: 'spotify_id' });
+                }, { onConflict: 'track_id' });
+
+                // RECORD ACTUAL HISTORY ENTRY (Deduplicated Back-to-Back)
+                const { data: lastEntry } = await supabaseAdmin
+                    .from('listening_history')
+                    .select('id, track_metadata')
+                    .eq(userId ? 'user_id' : 'guest_id', userId || guestId)
+                    .order('played_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                const isDuplicate = lastEntry && (lastEntry.track_metadata as any).id === track.id;
+
+                if (isDuplicate) {
+                    // Just update the timestamp to bring it to the top
+                    await supabaseAdmin
+                        .from('listening_history')
+                        .update({ played_at: new Date().toISOString() })
+                        .eq('id', lastEntry.id);
+                } else {
+                    // New track or separated by others, insert new
+                    await supabaseAdmin.from('listening_history').insert({
+                        user_id: userId || null,
+                        guest_id: guestId || null,
+                        track_metadata: track,
+                        played_at: new Date().toISOString()
+                    });
+                }
             } catch (e) {
-                console.warn('Supabase sync skipped (offline mode)');
+                console.warn('Supabase history sync skipped', e);
             }
         }
 
         // 2. Reinforce User Taste (The "Moving Average" update)
-        const userId = 'anonymous-pro-session';
-        const redisKey = `user_vibe:${userId}`;
+        const vibeId = userId || guestId || 'anonymous-pro-session';
+        const redisKey = `user_vibe:${vibeId}`;
 
         let nextVibe: number[];
 
-        // Safety check for Upstash
         if (process.env.UPSTASH_REDIS_REST_URL?.includes('your-upstash')) {
-            console.log('Taste Engine: Upstash setup pending. Using local session vibe.');
             (global as any).fallback_vibe = songVector;
             nextVibe = songVector;
         } else {
@@ -85,9 +112,7 @@ export async function logPlay(track: { id: string, title: string, artist: string
                 }
                 await redis.set(redisKey, nextVibe, { ex: 60 * 60 * 24 * 7 });
             } catch (redisError) {
-                console.error('Upstash is down, falling back to session-only vibe.');
-                // Fallback: We keep the vibe in a global variable for this server instance
-                // In a real prod app, you might use an encrypted cookie for this fallback
+                console.error('Upstash sync fallback');
                 (global as any).fallback_vibe = songVector;
                 nextVibe = songVector;
             }

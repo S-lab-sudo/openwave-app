@@ -106,3 +106,16 @@ CREATE TABLE IF NOT EXISTS playlist_likes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_community_leaderboard ON community_playlists (upvote_count DESC);
+
+-- 8. Listening History: Taste Engine Source
+CREATE TABLE IF NOT EXISTS listening_history (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id uuid REFERENCES auth.users ON DELETE CASCADE, -- Nullable for guests
+    guest_id TEXT, -- Persistent Guest ID from useAuthStore
+    track_metadata JSONB NOT NULL,
+    played_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_history_user ON listening_history (user_id);
+CREATE INDEX IF NOT EXISTS idx_history_guest ON listening_history (guest_id);
+CREATE INDEX IF NOT EXISTS idx_history_time ON listening_history (played_at DESC);

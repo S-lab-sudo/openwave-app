@@ -44,8 +44,8 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                 toast.success('Verification email sent! Please check your inbox.');
                 onClose();
             }
-        } catch (error: any) {
-            toast.error(error.message);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'An unknown error occurred');
         } finally {
             setIsLoading(false);
         }
@@ -60,8 +60,8 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
                 }
             });
             if (error) throw error;
-        } catch (error: any) {
-            toast.error(error.message);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'An unknown error occurred');
         }
     };
 

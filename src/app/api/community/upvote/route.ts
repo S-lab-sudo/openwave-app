@@ -41,8 +41,8 @@ export async function POST(request: Request) {
         }
 
         return NextResponse.json({ success: true, upvotes: newUpvoteCount });
-    } catch (error: any) {
-        console.error('Community Upvote Error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Community Upvote Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }

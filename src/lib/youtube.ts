@@ -9,6 +9,15 @@ export interface YouTubeMetadata {
     duration?: number;
 }
 
+interface YouTubeResultItem {
+    id: string;
+    title: string;
+    artist: string;
+    thumbnail: string;
+    duration: number;
+    youtubeUrl: string;
+}
+
 /**
  * CLEAN & ROBUST YOUTUBE ENGINE
  * No API Keys required. Everything flows through our localized YT-DLP proxy.
@@ -19,7 +28,7 @@ export async function fetchYouTubeMetadata(url: string): Promise<YouTubeMetadata
         const response = await fetch(`/api/search?type=metadata&q=${encodeURIComponent(url)}`);
         if (!response.ok) throw new Error('Metadata fetch failed');
 
-        const data = await response.json();
+        const data = await response.json() as { items: YouTubeResultItem[] };
         const item = data.items?.[0];
 
         if (!item) throw new Error('No metadata found for URL');
@@ -32,28 +41,29 @@ export async function fetchYouTubeMetadata(url: string): Promise<YouTubeMetadata
             duration: item.duration,
         };
     } catch (error) {
-        console.error('Metadata fetch error:', error);
+        console.error('Metadata fetch error:', error instanceof Error ? error.message : 'Unknown error');
         throw error;
     }
 }
 
-export async function searchYouTubePlaylists(query: string): Promise<any[]> {
+export async function searchYouTubePlaylists(query: string): Promise<Track[]> {
     try {
         const response = await fetch(`/api/search?type=playlist&q=${encodeURIComponent(query)}`);
         if (!response.ok) return [];
 
-        const data = await response.json();
-        return (data.items || []).map((item: any) => ({
+        const data = await response.json() as { items: YouTubeResultItem[] };
+        return (data.items || []).map((item) => ({
             id: item.id,
             title: item.title,
             artist: item.artist,
             thumbnail: item.thumbnail,
             youtubeUrl: item.youtubeUrl,
-            trackCount: item.duration || 0, // yt-dlp often puts playlist count in duration field for flat-playlist
+            duration: 0,
+            album: 'Playlist',
             isPlaylist: true
-        }));
+        } as unknown as Track));
     } catch (error) {
-        console.error('Playlist search failed:', error);
+        console.error('Playlist search failed:', error instanceof Error ? error.message : 'Unknown error');
         return [];
     }
 }
@@ -63,8 +73,8 @@ export async function searchYouTubeTracks(query: string): Promise<Track[]> {
         const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         if (!response.ok) return [];
 
-        const data = await response.json();
-        return (data.items || []).map((item: any) => ({
+        const data = await response.json() as { items: YouTubeResultItem[] };
+        return (data.items || []).map((item) => ({
             id: item.id,
             title: item.title,
             artist: item.artist,
@@ -72,9 +82,9 @@ export async function searchYouTubeTracks(query: string): Promise<Track[]> {
             youtubeUrl: item.youtubeUrl,
             duration: item.duration,
             album: 'Search Result'
-        }));
+        } as Track));
     } catch (error) {
-        console.error('Search failed:', error);
+        console.error('Search failed:', error instanceof Error ? error.message : 'Unknown error');
         return [];
     }
 }
@@ -82,12 +92,11 @@ export async function searchYouTubeTracks(query: string): Promise<Track[]> {
 
 export async function getTrendingTracks(regionCode: string = 'US'): Promise<Track[]> {
     try {
-        // We use our specialized trending endpoint in the search API
         const response = await fetch(`/api/search?type=trending`);
         if (!response.ok) return [];
 
-        const data = await response.json();
-        return (data.items || []).map((item: any) => ({
+        const data = await response.json() as { items: YouTubeResultItem[] };
+        return (data.items || []).map((item) => ({
             id: item.id,
             title: item.title,
             artist: item.artist,
@@ -95,9 +104,9 @@ export async function getTrendingTracks(regionCode: string = 'US'): Promise<Trac
             youtubeUrl: item.youtubeUrl,
             duration: item.duration,
             album: 'Trending'
-        }));
+        } as Track));
     } catch (error) {
-        console.error('Trending fetch failed:', error);
+        console.error('Trending fetch failed:', error instanceof Error ? error.message : 'Unknown error');
         return [];
     }
 }
@@ -116,7 +125,7 @@ const GENRE_KEYWORDS = [
     'Synthwave 80s', 'UK Garage', 'Latin Hits', 'K-Pop Rising'
 ];
 
-export async function getDynamicEditorsPicks() {
+export async function getDynamicEditorsPicks(): Promise<DynamicPlaylist[]> {
     const hour = new Date().getHours();
 
     let timeKey: keyof typeof TIME_CONTEXTS = 'AFTERNOON';
@@ -136,11 +145,11 @@ export async function getDynamicEditorsPicks() {
                     description: `Fresh mix curated for ${query.toLowerCase()}.`,
                     coverUrl: tracks[0].thumbnail,
                     tracks: tracks
-                };
+                } as DynamicPlaylist;
             }
             return null;
         })
     );
 
-    return picks.filter(Boolean) as DynamicPlaylist[];
+    return picks.filter((p): p is DynamicPlaylist => p !== null);
 }

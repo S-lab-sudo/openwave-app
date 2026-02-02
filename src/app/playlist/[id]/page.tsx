@@ -45,9 +45,23 @@ import { Input } from '@/components/ui/input';
 import { formatDuration, cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
+interface Playlist {
+    id: string;
+    title: string;
+    description: string;
+    coverUrl: string;
+    tracks: Track[];
+    trackCount: number;
+    isPublic?: boolean;
+}
+
+interface YouTubeSearchItem extends Track {
+    playlist_title?: string;
+}
+
 export default function PlaylistView() {
     const { id } = useParams();
-    const [playlist, setPlaylist] = useState<any>(null);
+    const [playlist, setPlaylist] = useState<Playlist | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState("Sequencing Collection...");
     const [isAdding, setIsAdding] = useState(false);
@@ -127,11 +141,11 @@ export default function PlaylistView() {
 
             try {
                 const res = await fetch(`/api/search?type=playlist_tracks&q=${playlistId}`);
-                const data = await res.json();
+                const data = await res.json() as { items: YouTubeSearchItem[] };
 
                 if (data.items && data.items.length > 0) {
                     // Search for any track that has the playlist_title field
-                    const rawTitle = data.items.find((t: any) => t.playlist_title)?.playlist_title || "YouTube Collection";
+                    const rawTitle = data.items.find((t) => t.playlist_title)?.playlist_title || "YouTube Collection";
 
                     // Simple cleaning for playlist titles
                     const metaTitle = rawTitle
@@ -143,13 +157,13 @@ export default function PlaylistView() {
                     const dynamicCover = data.items[0].thumbnail || '';
 
                     // Root Fix: Deduplicate and filter out Private/Deleted tracks
-                    const uniqueTracks = Array.from(new Map(data.items.map((t: any) => [t.id, t])).values()) as Track[];
+                    const uniqueTracks = Array.from(new Map(data.items.map((t) => [t.id, t])).values()) as Track[];
                     const filteredTracks = uniqueTracks.filter(t =>
                         !t.title?.toLowerCase().includes('[private') &&
                         !t.title?.toLowerCase().includes('[deleted')
                     );
 
-                    const dynamic = {
+                    const dynamic: Playlist = {
                         id: playlistId,
                         title: metaTitle,
                         description: `Shared collection with ${filteredTracks.length} frequencies`,
@@ -172,17 +186,17 @@ export default function PlaylistView() {
         };
 
         // 1. Search in Dynamic Editors Picks (Priority)
-        let found = editorsPicks.find(p => p.id === id);
+        let found = editorsPicks.find(p => p.id === id) as Playlist | undefined;
 
         // 2. Search in Stored User Playlists
         if (!found) {
-            found = storedUserPlaylists.find(p => p.id === id);
+            found = storedUserPlaylists.find(p => p.id === id) as unknown as Playlist;
         }
 
         // 3. Search in Static/Mock Playlists (Fallback)
         if (!found) {
             const allPlaylists = [...featuredPlaylists, ...userPlaylists];
-            found = allPlaylists.find(p => p.id === id);
+            found = allPlaylists.find(p => p.id === id) as unknown as Playlist;
         }
 
         if (found) {
@@ -224,7 +238,7 @@ export default function PlaylistView() {
         const fetchCommunityStats = async () => {
             try {
                 const res = await fetch(`/api/community/playlists?id=${id}`);
-                const data = await res.json();
+                const data = await res.json() as { item?: { upvote_count: number } };
                 if (data.item) {
                     setCommunityVotes(data.item.upvote_count);
                 }
@@ -266,6 +280,7 @@ export default function PlaylistView() {
     };
 
     const handleAddTrackById = async (track: Track) => {
+        if (!playlist) return;
         setIsAdding(true);
         try {
             // Duplicate Check
@@ -301,7 +316,7 @@ export default function PlaylistView() {
 
         const currentlyLiked = isLiked;
         // Optimization: UI reflex
-        toggleLikePlaylist(playlist);
+        toggleLikePlaylist(playlist as any);
 
         // Senior Engineer Move: Optimistic Counter Update
         if (communityVotes !== null) {
@@ -336,7 +351,7 @@ export default function PlaylistView() {
     };
 
     const handleUpdateCover = () => {
-        if (!newCoverUrl.trim()) return;
+        if (!newCoverUrl.trim() || !playlist) return;
 
         const updatedPlaylist = { ...playlist, coverUrl: newCoverUrl };
         setPlaylist(updatedPlaylist);
@@ -351,6 +366,7 @@ export default function PlaylistView() {
     };
 
     const handleRemoveTrack = (trackId: string) => {
+        if (!playlist) return;
         const updatedTracks = playlist.tracks.filter((t: Track) => t.id !== trackId);
         const updatedPlaylist = { ...playlist, tracks: updatedTracks, trackCount: updatedTracks.length };
         setPlaylist(updatedPlaylist);
@@ -373,7 +389,7 @@ export default function PlaylistView() {
 
             // Senior Engineer Move: Immediate Cloud Sync
             if (user) {
-                syncPlaylist(user.id, updatedPlaylist);
+                syncPlaylist(user.id, updatedPlaylist as any);
             }
 
             toast.success('Playlist updated');
@@ -670,7 +686,7 @@ export default function PlaylistView() {
 
                                                 // Senior Engineer Move: Immediate Cloud Persistence
                                                 if (user) {
-                                                    syncPlaylist(user.id, updated);
+                                                    syncPlaylist(user.id, updated as any);
                                                 }
 
                                                 // Sync with community leaderboard if it exists there
@@ -737,7 +753,7 @@ export default function PlaylistView() {
 
                     <div className="space-y-1">
                         {playlist.tracks && playlist.tracks.length > 0 ? (
-                            playlist.tracks.map((track: any, index: number) => (
+                            playlist.tracks.map((track, index) => (
                                 <motion.div
                                     key={track.id}
                                     initial={{ opacity: 0, y: 10 }}
@@ -767,7 +783,7 @@ export default function PlaylistView() {
                                         <span className="text-[11px] font-black tracking-widest text-[#333333] group-hover:text-white transition-colors">
                                             {track.duration ? formatDuration(track.duration) : '--:--'}
                                         </span>
-                                        {!playlist.id.startsWith('dynamic') && !playlist.id.startsWith('trending') && (
+                                        {!playlist.id.startsWith('dynamic') && !playlist.id.startsWith('trending') && isOwned && (
                                             <button
                                                 onClick={(e) => {
                                                     e.stopPropagation();
@@ -798,84 +814,73 @@ export default function PlaylistView() {
                         "fixed left-0 right-0 z-[100] transition-all duration-500 pointer-events-auto",
                         currentTrack ? "bottom-28" : "bottom-12"
                     )}>
-                        <div className="container mx-auto px-8">
+                        <div className="container mx-auto px-8 flex justify-center">
                             <Drawer>
                                 <DrawerTrigger asChild>
                                     <Button
-                                        className="w-full bg-[#111111] hover:bg-[#161616] text-white border border-white/5 rounded-2xl h-14 font-black uppercase tracking-widest text-[11px] flex items-center justify-center gap-3 transition-all active:scale-[0.98] group cursor-pointer"
+                                        className="h-12 px-8 bg-white text-black hover:bg-[#e85a20] hover:text-white rounded-full font-black uppercase tracking-[0.2em] text-[10px] shadow-2xl shadow-orange-950/20 group transition-all duration-500 active:scale-95 cursor-pointer"
                                     >
-                                        <Plus className="w-5 h-5 transition-transform group-hover:rotate-90 text-[#e85a20]" strokeWidth={3} />
-                                        Add Frequencies
+                                        <Plus className="w-4 h-4 mr-3 group-hover:rotate-90 transition-transform duration-500" />
+                                        Expand Collection
                                     </Button>
                                 </DrawerTrigger>
-                                <DrawerContent>
-                                    <div className="mx-auto w-full max-w-2xl p-8 space-y-8 pb-16">
-                                        <DrawerHeader className="p-0 text-left">
-                                            <div className="flex items-center justify-between">
-                                                <div>
-                                                    <DrawerTitle className="text-2xl">Add to Mix</DrawerTitle>
-                                                    <DrawerDescription className="mt-0.5 text-[10px]">Build your collection with global tracks</DrawerDescription>
-                                                </div>
-                                            </div>
+                                <DrawerContent className="bg-[#0a0a0a] border-white/5 h-[80vh]">
+                                    <div className="mx-auto w-full max-w-2xl px-8 py-10 space-y-10">
+                                        <DrawerHeader className="p-0 text-left space-y-2">
+                                            <DrawerTitle className="text-2xl font-black text-white">Neural Search</DrawerTitle>
+                                            <DrawerDescription className="text-[10px] font-black uppercase tracking-[0.3em] text-[#333333]">Query the OpenWave global music index</DrawerDescription>
                                         </DrawerHeader>
 
                                         <form onSubmit={handleSearchSubmit} className="relative group">
-                                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#222222] group-focus-within:text-[#444444] transition-colors" />
+                                            <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-[#222222] group-focus-within:text-[#e85a20] transition-colors" />
                                             <Input
-                                                autoFocus
-                                                placeholder="Search song, artist, or paste URL..."
+                                                placeholder="Artist, track, or ambiance..."
                                                 value={searchQuery}
                                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                                className="bg-white/5 border-none focus:bg-white/[0.07] h-12 rounded-xl pl-12 pr-6 text-sm font-medium focus-visible:ring-0 focus-visible:ring-offset-0 transition-all placeholder:text-[#222222]"
+                                                className="h-16 pl-14 bg-white/[0.02] border-white/5 rounded-2xl text-lg font-bold placeholder:text-[#1a1a1a] focus:ring-0 focus:border-[#e85a20]/30 transition-all shadow-2xl"
+                                                autoFocus
                                             />
                                         </form>
 
-                                        <div className="max-h-[45vh] overflow-y-auto pr-2 scrollbar-hide space-y-1">
+                                        <div className="space-y-4 max-h-[45vh] overflow-y-auto pr-4 subtle-scrollbar">
                                             {isSearching ? (
-                                                <div className="flex flex-col items-center justify-center py-16 gap-3">
+                                                <div className="py-20 flex flex-col items-center justify-center space-y-4">
                                                     <Loader2 className="w-8 h-8 text-[#e85a20] animate-spin" />
-                                                    <p className="text-[9px] font-black uppercase tracking-widest text-[#444444]">Scanning frequencies...</p>
+                                                    <p className="text-[8px] font-black uppercase text-[#333333]">Querying neural nodes...</p>
                                                 </div>
                                             ) : searchResults.length > 0 ? (
-                                                searchResults.map((track) => {
-                                                    const isInPlaylist = playlist.tracks?.some((t: Track) => t.id === track.id);
-                                                    return (
-                                                        <div
-                                                            key={track.id}
-                                                            onClick={() => !isInPlaylist && handleAddTrackById(track)}
-                                                            className={cn(
-                                                                "group flex items-center justify-between p-3 rounded-xl transition-all border border-transparent",
-                                                                isInPlaylist ? "opacity-40 cursor-not-allowed" : "hover:bg-white/5 cursor-pointer active:scale-[0.99]"
-                                                            )}
-                                                        >
-                                                            <div className="flex items-center gap-4">
-                                                                <div className="relative">
-                                                                    <img src={track.thumbnail || undefined} className="w-12 h-12 rounded-lg object-cover grayscale group-hover:grayscale-0 transition-all shadow-md" alt="" />
-                                                                    {!isInPlaylist && (
-                                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
-                                                                            <Plus className="w-5 h-5 text-white" />
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                                <div>
-                                                                    <p className="font-bold text-sm text-white line-clamp-1 group-hover:text-[#e85a20] transition-colors">{track.title}</p>
-                                                                    <p className="text-[10px] font-medium text-[#666666] mt-0.5">{track.artist}</p>
-                                                                </div>
-                                                            </div>
-                                                            <div className="pr-2">
-                                                                {isInPlaylist ? (
-                                                                    <div className="text-[10px] font-bold text-[#e85a20]">Added</div>
-                                                                ) : (
-                                                                    <div className="w-1 h-1 rounded-full bg-[#1a1a1a] shadow-none group-hover:bg-[#e85a20] group-hover:shadow-[0_0_8px_rgba(232,90,32,0.6)] transition-all" />
-                                                                )}
+                                                searchResults.map((track, index) => (
+                                                    <motion.div
+                                                        key={track.id}
+                                                        initial={{ opacity: 0, x: -10 }}
+                                                        animate={{ opacity: 1, x: 0 }}
+                                                        transition={{ delay: index * 0.03 }}
+                                                        className="flex items-center justify-between p-4 rounded-2xl bg-white/[0.01] border border-white/5 hover:bg-white/[0.03] transition-all group"
+                                                    >
+                                                        <div className="flex items-center gap-4 min-w-0">
+                                                            <img src={track.thumbnail || undefined} className="w-12 h-12 rounded-xl object-cover shadow-lg" alt="" />
+                                                            <div className="min-w-0">
+                                                                <p className="font-bold text-sm text-white truncate">{track.title}</p>
+                                                                <p className="text-[10px] font-medium text-[#444444] truncate">{track.artist}</p>
                                                             </div>
                                                         </div>
-                                                    );
-                                                })
-                                            ) : searchQuery && (
-                                                <div className="py-16 text-center">
-                                                    <Search className="w-10 h-10 text-[#111111] mx-auto mb-4" />
-                                                    <p className="text-[9px] font-black uppercase tracking-[0.3em] text-[#222222]">No frequencies found</p>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="ghost"
+                                                            disabled={isAdding}
+                                                            onClick={() => handleAddTrackById(track)}
+                                                            className="w-10 h-10 rounded-full bg-white/5 hover:bg-white hover:text-black transition-all cursor-pointer p-0"
+                                                        >
+                                                            <Plus className="w-4 h-4" />
+                                                        </Button>
+                                                    </motion.div>
+                                                ))
+                                            ) : searchQuery ? (
+                                                <div className="py-20 text-center text-[#222222]">No frequencies found matching that query.</div>
+                                            ) : (
+                                                <div className="py-20 flex flex-col items-center justify-center gap-4 text-[#1a1a1a]">
+                                                    <Search className="w-8 h-8 opacity-20" />
+                                                    <p className="text-[9px] font-black uppercase tracking-widest opacity-20">Awaiting Search Input</p>
                                                 </div>
                                             )}
                                         </div>
@@ -886,6 +891,6 @@ export default function PlaylistView() {
                     </div>
                 )
             }
-        </div >
+        </div>
     );
 }

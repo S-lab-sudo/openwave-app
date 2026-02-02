@@ -8,13 +8,13 @@ import { cn, formatDuration } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SearchInput } from '@/components/ui/search-input';
 import { PlaylistCard } from '@/components/playlist/PlaylistCard';
-import { mockTracks } from '@/data/mockData';
 import { useEffect, useState, useRef } from 'react';
-import { getTrendingTracks, getDynamicEditorsPicks } from '@/lib/youtube';
+import { getTrendingTracks } from '@/lib/youtube';
 import { usePlayerStore, Track } from '@/store/usePlayerStore';
 import { TrackRow } from '@/components/playlist/TrackRow';
 import { useContentStore } from '@/store/useContentStore';
 import { useSearchStore } from '@/store/useSearchStore';
+import { CommunityPlaylistEntry, SupabasePlaylist } from '@/types/database';
 
 export default function Home() {
   const router = useRouter();
@@ -23,12 +23,11 @@ export default function Home() {
 
   const [trendingTracks, setTrendingTracks] = useState<Track[]>([]);
   const [recommendedTracks, setRecommendedTracks] = useState<Track[]>([]);
-  const [communityPlaylists, setCommunityPlaylists] = useState<any[]>([]);
-  const [curatedPlaylists, setCuratedPlaylists] = useState<any[]>([]);
+  const [communityPlaylists, setCommunityPlaylists] = useState<CommunityPlaylistEntry[]>([]);
+  const [curatedPlaylists, setCuratedPlaylists] = useState<SupabasePlaylist[]>([]);
   const [visibleTracks, setVisibleTracks] = useState(5);
   const [isLoading, setIsLoading] = useState(true);
   const [isFetchingCommunity, setIsFetchingCommunity] = useState(false);
-  const [userCountry, setUserCountry] = useState<string | null>(null);
   const [isRefreshingRecs, setIsRefreshingRecs] = useState(false);
   const { query: globalSearchQuery, setQuery: setGlobalSearchQuery } = useSearchStore();
   const [homeSearch, setHomeSearch] = useState('');
@@ -52,39 +51,6 @@ export default function Home() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
-    
-    // ROOT FIX: Implement geolocation caching to avoid 429 errors
-    const CACHE_KEY = 'ow_user_country';
-    const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
-    
-    const cached = localStorage.getItem(CACHE_KEY);
-    if (cached) {
-      const { country, timestamp } = JSON.parse(cached);
-      if (Date.now() - timestamp < CACHE_EXPIRY) {
-        setUserCountry(country);
-        return;
-      }
-    }
-
-    const fetchCountry = async () => {
-      try {
-        const res = await fetch('https://ipapi.co/json/');
-        if (!res.ok) throw new Error('Geolocation rate limit or failure');
-        const data = await res.json();
-        
-        if (data?.country) {
-          setUserCountry(data.country);
-          localStorage.setItem(CACHE_KEY, JSON.stringify({
-            country: data.country,
-            timestamp: Date.now()
-          }));
-        }
-      } catch (err) {
-        console.warn("Geolocation fallback to global", err instanceof Error ? err.message : 'Unknown error');
-      }
-    };
-
-    fetchCountry();
   }, []);
 
   useEffect(() => {
@@ -111,7 +77,7 @@ export default function Home() {
     setIsFetchingCommunity(true);
     try {
       const res = await fetch('/api/community/playlists');
-      const data = await res.json();
+      const data = await res.json() as { items: CommunityPlaylistEntry[] };
       setCommunityPlaylists(data.items || []);
     } catch (error) {
       console.error("Failed to fetch community playlists", error);
@@ -123,7 +89,7 @@ export default function Home() {
   const refreshCuratedPlaylists = async () => {
     try {
       const response = await fetch('/api/taste/playlists');
-      const data = await response.json();
+      const data = await response.json() as { items: SupabasePlaylist[] };
       setCuratedPlaylists(data.items || []);
     } catch (e) {
       console.error("Failed to fetch playlists", e);
@@ -133,10 +99,9 @@ export default function Home() {
   const refreshRecommendedTracks = async (moodQuery?: string) => {
     setIsRefreshingRecs(true);
     try {
-      const localizedQuery = (userCountry && moodQuery) ? `${userCountry} ${moodQuery}` : moodQuery;
-      const endpoint = localizedQuery ? `/api/search?q=${encodeURIComponent(localizedQuery)}` : '/api/search?q=Top Hits 2024';
+      const endpoint = moodQuery ? `/api/search?q=${encodeURIComponent(moodQuery)}` : '/api/search?q=Top Hits 2024';
       const response = await fetch(endpoint);
-      const data = await response.json();
+      const data = await response.json() as { items: Track[] };
       setRecommendedTracks(data.items || []);
     } catch (error) {
       console.error("Failed to refresh recommendations", error);
@@ -145,7 +110,7 @@ export default function Home() {
     }
   };
 
-  const handleMoodSelect = (mood: any) => {
+  const handleMoodSelect = (mood: { name: string, query: string }) => {
     setSelectedMood(mood.name);
     refreshRecommendedTracks(mood.query);
   };
@@ -238,7 +203,7 @@ export default function Home() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-8">
             {communityPlaylists.length > 0 ? communityPlaylists.map((playlist, index) => (
               <motion.div key={playlist.id} initial={{ opacity: 0, scale: 0.9 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true }} transition={{ delay: index * 0.1 }}>
-                <PlaylistCard id={playlist.id} title={playlist.title} description={playlist.description} coverUrl={playlist.coverUrl} isPublic={true} showPrivacy={false} trackCount={playlist.upvotes} />
+                <PlaylistCard id={playlist.id} title={playlist.title} description={playlist.description} coverUrl={playlist.cover_url} isPublic={true} showPrivacy={false} trackCount={playlist.upvote_count} />
               </motion.div>
             )) : <div className="col-span-full py-20 text-center text-[#222222]">No community favorites yet.</div>}
           </div>

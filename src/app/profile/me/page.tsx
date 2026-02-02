@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useContentStore } from '@/store/useContentStore';
-import { usePlayerStore } from '@/store/usePlayerStore';
+import { usePlayerStore, Track } from '@/store/usePlayerStore';
 import { TrackRow } from '@/components/playlist/TrackRow';
 
 export default function ProfilePage() {
@@ -38,8 +38,8 @@ export default function ProfilePage() {
                     const cloudHistory = data.history;
                     const localHistory = usePlayerStore.getState().history;
 
-                    const combinedHistory = [...cloudHistory, ...localHistory.filter((h: any) =>
-                        !cloudHistory.some((ch: any) => ch.id === h.id)
+                    const combinedHistory = [...cloudHistory, ...localHistory.filter((h: Track) =>
+                        !cloudHistory.some((ch: Track) => ch.id === h.id)
                     )].slice(0, 50);
 
                     setHistory(combinedHistory);

@@ -26,9 +26,9 @@ export async function GET(request: Request) {
             debug_vibe: tasteProfile.description
         });
 
-    } catch (error: any) {
-        console.error('Playlist Recommendation API Error:', error);
-        return NextResponse.json({ items: [], error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Playlist Recommendation API Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ items: [], error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }
 

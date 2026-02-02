@@ -155,7 +155,7 @@ export async function GET(request: Request) {
             try {
                 // 1. REDIS CHECK
                 const redisKey = 'billboard_hot_100_v1';
-                const cachedData = await safeRedis.get<any[]>(redisKey);
+                const cachedData = await safeRedis.get<YouTubeTrack[]>(redisKey);
                 if (cachedData && cachedData.length > 0) {
                     return NextResponse.json({ items: cachedData, query, type, source: 'cache:redis' });
                 }
@@ -250,8 +250,11 @@ export async function GET(request: Request) {
 
         return NextResponse.json({ items: [], query, type });
 
-    } catch (error: any) {
-        console.error('Search API Route Error:', error);
-        return NextResponse.json({ items: [], error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Search API Route Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ 
+            items: [], 
+            error: error instanceof Error ? error.message : 'Unknown error' 
+        }, { status: 500 });
     }
 }

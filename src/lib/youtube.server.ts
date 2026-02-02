@@ -25,7 +25,19 @@ export interface Playlist {
     tracks: Track[];
 }
 
-const directSearchCache = new Map<string, { data: any, timestamp: number }>();
+interface YouTubeRawData {
+    id: string;
+    title?: string;
+    uploader?: string;
+    channel?: string;
+    duration?: number;
+    thumbnail?: string;
+    description?: string;
+    thumbnails?: { url: string }[];
+    _type?: string;
+}
+
+const directSearchCache = new Map<string, { data: Track[] | Playlist[], timestamp: number }>();
 const CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
 /**
@@ -36,13 +48,15 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
     const cacheKey = `tracks:${query}`;
     const cached = directSearchCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return cached.data;
+        return cached.data as Track[];
     }
 
-    const ytDlpPath = path.join(process.cwd(), 'bin', 'yt-dlp.exe');
-    if (!fs.existsSync(ytDlpPath)) {
-        console.error('yt-dlp binary not found');
-        return [];
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+    let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
+
+    if (!isWindows && !fs.existsSync(ytDlpPath)) {
+        ytDlpPath = 'yt-dlp';
     }
 
     return new Promise((resolve) => {
@@ -70,7 +84,7 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
                 const tracks = lines.map((line): Track | null => {
                     if (!line.trim()) return null;
                     try {
-                        const json: any = JSON.parse(line);
+                        const json = JSON.parse(line) as YouTubeRawData;
 
                         // FILTER: Exclude long videos (Mixes/Compilations > 12 mins)
                         const duration = Math.floor(json.duration || 0);
@@ -78,7 +92,7 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
 
                         return {
                             id: json.id,
-                            title: json.title,
+                            title: json.title || 'Unknown Title',
                             artist: json.uploader || json.channel || 'Unknown Artist',
                             thumbnail: json.thumbnail || `https://i.ytimg.com/vi/${json.id}/hqdefault.jpg`,
                             duration: duration,
@@ -109,10 +123,12 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
  * Returns curated playlists based on search query.
  */
 export async function searchYouTubePlaylistsDirect(query: string, limit: number = 5): Promise<Playlist[]> {
-    const ytDlpPath = path.join(process.cwd(), 'bin', 'yt-dlp.exe');
-    if (!fs.existsSync(ytDlpPath)) {
-        console.error('yt-dlp binary not found');
-        return [];
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+    let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
+
+    if (!isWindows && !fs.existsSync(ytDlpPath)) {
+        ytDlpPath = 'yt-dlp';
     }
 
     return new Promise((resolve) => {
@@ -139,7 +155,7 @@ export async function searchYouTubePlaylistsDirect(query: string, limit: number 
                 const playlists = lines.map((line): Playlist | null => {
                     if (!line.trim()) return null;
                     try {
-                        const json: any = JSON.parse(line);
+                        const json = JSON.parse(line) as YouTubeRawData;
                         return {
                             id: json.id,
                             title: json.title || 'Untitled Playlist',

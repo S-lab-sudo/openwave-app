@@ -12,8 +12,8 @@ export async function POST(request: Request) {
         await logPlay(track, userId, guestId);
 
         return NextResponse.json({ success: true });
-    } catch (error: any) {
-        console.error('Log Play API Error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Log Play API Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }

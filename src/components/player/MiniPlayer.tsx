@@ -55,7 +55,7 @@ export function MiniPlayer() {
   const hasLoggedRef = useRef(false);
 
   // Sync anchor: When the official player reports progress, we gently nudge our smooth ref
-  const handleProgress = (state: any) => {
+  const handleProgress = (state: { played: number; playedSeconds: number; loaded: number; loadedSeconds: number }) => {
     const realProgress = state.played * 100;
     setProgress(realProgress);
 

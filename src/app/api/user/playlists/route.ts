@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { SupabasePlaylist, SupabaseTrack } from '@/types/database';
+import { Track } from '@/store/usePlayerStore';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -49,7 +50,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-    const body = await request.json();
+    const body = await request.json() as { userId: string, playlist: { id: string, title: string, description: string, coverUrl: string, isPublic?: boolean, tracks: Track[] } };
     const { userId, playlist } = body;
 
     if (!userId || !playlist) {
@@ -57,6 +58,8 @@ export async function POST(request: Request) {
     }
 
     try {
+        if (!supabase) throw new Error('Supabase not initialized');
+
         // 1. Upsert the playlist
         const { data: pData, error: pError } = await supabase
             .from('playlists')
@@ -76,7 +79,7 @@ export async function POST(request: Request) {
         // 2. Sync tracks
         if (playlist.tracks && playlist.tracks.length > 0) {
             // First, ensure all tracks exist in tracks table
-            const trackInserts = playlist.tracks.map((t: any) => ({
+            const trackInserts = playlist.tracks.map((t: Track) => ({
                 track_id: t.id,
                 title: t.title,
                 artist: t.artist,
@@ -94,29 +97,28 @@ export async function POST(request: Request) {
             // Delete old tracks and insert new ones for this playlist
             await supabase.from('playlist_tracks').delete().eq('playlist_id', pData.id);
 
-            const ptInserts = playlist.tracks.map((t: any, index: number) => {
-                const track = tData.find((td: any) => td.track_id === t.id);
+            const ptInserts = playlist.tracks.map((t: Track, index: number) => {
+                const track = ((tData as unknown) as SupabaseTrack[]).find((td) => td.track_id === t.id);
+                if (!track) return null;
                 return {
                     playlist_id: pData.id,
                     track_id: track.id,
                     position: index
                 };
-            });
+            }).filter(item => item !== null);
 
             if (ptInserts.length > 0) {
                 const { error: ptError } = await supabase.from('playlist_tracks').insert(ptInserts);
                 if (ptError) {
                     console.error('Playlist Tracks Insert Error:', ptError);
-                    // If position-based PK is not yet active, we might still hit 23505
-                    // but we'll try to handle it.
                 }
             }
         }
 
         return NextResponse.json({ success: true, id: pData.id });
-    } catch (error: any) {
-        console.error('Save Playlist Error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Save Playlist Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }
 
@@ -130,6 +132,8 @@ export async function DELETE(request: Request) {
     }
 
     try {
+        if (!supabase) throw new Error('Supabase not initialized');
+
         const { error } = await supabase
             .from('playlists')
             .delete()
@@ -138,8 +142,8 @@ export async function DELETE(request: Request) {
 
         if (error) throw error;
         return NextResponse.json({ success: true });
-    } catch (error: any) {
-        console.error('Delete Playlist Error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Delete Playlist Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }

@@ -1,14 +1,14 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
-import { User } from '@supabase/supabase-js';
+import { User, Session } from '@supabase/supabase-js';
 
 interface AuthState {
     user: User | null;
-    session: any | null;
+    session: Session | null;
     isLoading: boolean;
     guestId: string | null;
     setUser: (user: User | null) => void;
-    setSession: (session: any | null) => void;
+    setSession: (session: Session | null) => void;
     setGuestId: (id: string) => void;
     signOut: () => Promise<void>;
 }

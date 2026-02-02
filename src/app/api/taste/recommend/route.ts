@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPersonalizedRecommendations, getUserTasteProfile } from '@/lib/taste';
 import { searchYouTubeTracksDirect } from '@/lib/youtube.server';
+import { SupabaseTrack } from '@/types/database';
 
 /**
  * GOD-TIER RECOMMENDATION SYNTHESIZER
@@ -15,12 +16,12 @@ export async function GET(request: Request) {
 
         if (vectorTracks.length > 5) {
             // Transform Supabase results to Track interface
-            const recommended = vectorTracks.map((t: any) => ({
-                id: t.spotify_id,
+            const recommended = (vectorTracks as unknown as SupabaseTrack[]).map((t) => ({
+                id: t.track_id,
                 title: t.title,
                 artist: t.artist,
-                thumbnail: t.thumbnail_url || `https://i.ytimg.com/vi/${t.spotify_id}/hqdefault.jpg`,
-                youtubeUrl: `https://www.youtube.com/watch?v=${t.spotify_id}`,
+                thumbnail: t.thumbnail_url || `https://i.ytimg.com/vi/${t.track_id}/hqdefault.jpg`,
+                youtubeUrl: `https://www.youtube.com/watch?v=${t.track_id}`,
                 album: 'Picked for You'
             }));
 
@@ -54,10 +55,8 @@ export async function GET(request: Request) {
             debug_taste: tasteProfile.description
         });
 
-    } catch (error: any) {
-        console.error('Recommendation Engine Error:', error);
+    } catch (error) {
+        console.error('Recommendation Engine Error:', error instanceof Error ? error.message : 'Unknown error');
         return NextResponse.json({ items: [], error: 'Synthesis failed' }, { status: 500 });
     }
 }
-
-

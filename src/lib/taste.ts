@@ -1,5 +1,5 @@
 import { supabaseAdmin } from './supabase-admin';
-import { redis } from './upstash';
+import { safeRedis } from './upstash';
 
 // --- THE 12-DIMENSIONAL MATRIX ENGINE ---
 // Dimensions: 1. danceability, 2. energy, 3. key, 4. loudness, 5. mode, 6. speechiness, 
@@ -70,7 +70,7 @@ export async function logPlay(
                     .limit(1)
                     .single();
 
-                const isDuplicate = lastEntry && (lastEntry.track_metadata as any).id === track.id;
+                const isDuplicate = lastEntry && (lastEntry.track_metadata as { id?: string })?.id === track.id;
 
                 if (isDuplicate) {
                     // Just update the timestamp to bring it to the top
@@ -88,7 +88,7 @@ export async function logPlay(
                     });
                 }
             } catch (e) {
-                console.warn('Supabase history sync skipped', e);
+                console.warn('Supabase history sync skipped', e instanceof Error ? e.message : 'Unknown error');
             }
         }
 
@@ -99,28 +99,26 @@ export async function logPlay(
         let nextVibe: number[];
 
         if (process.env.UPSTASH_REDIS_REST_URL?.includes('your-upstash')) {
-            (global as any).fallback_vibe = songVector;
             nextVibe = songVector;
         } else {
             try {
-                const currentVibeRaw = await redis.get(redisKey) as number[] | null;
+                const currentVibeRaw = await safeRedis.get<number[]>(redisKey);
                 if (!currentVibeRaw) {
                     nextVibe = songVector;
                 } else {
                     const learningRate = 0.15;
                     nextVibe = currentVibeRaw.map((val, i) => val + (songVector[i] - val) * learningRate);
                 }
-                await redis.set(redisKey, nextVibe, { ex: 60 * 60 * 24 * 7 });
+                await safeRedis.set(redisKey, nextVibe, { ex: 60 * 60 * 24 * 7 });
             } catch (redisError) {
-                console.error('Upstash sync fallback');
-                (global as any).fallback_vibe = songVector;
+                console.error('Upstash sync fallback', redisError instanceof Error ? redisError.message : 'Unknown error');
                 nextVibe = songVector;
             }
         }
 
         return { success: true, vector: nextVibe };
     } catch (error) {
-        console.error('Core log play failed:', error);
+        console.error('Core log play failed:', error instanceof Error ? error.message : 'Unknown error');
         return { success: false };
     }
 }
@@ -134,9 +132,9 @@ export async function getPersonalizedRecommendations(limit: number = 10) {
         let userVibe: number[] | null = null;
 
         try {
-            userVibe = await redis.get(`user_vibe:${userId}`) as number[] | null;
+            userVibe = await safeRedis.get<number[]>(`user_vibe:${userId}`);
         } catch {
-            userVibe = (global as any).fallback_vibe || null;
+            userVibe = null;
         }
 
         if (!userVibe) return [];
@@ -154,7 +152,7 @@ export async function getPersonalizedRecommendations(limit: number = 10) {
 
         return data || [];
     } catch (error) {
-        console.error('Recommendation synthesis failed:', error);
+        console.error('Recommendation synthesis failed:', error instanceof Error ? error.message : 'Unknown error');
         return [];
     }
 }
@@ -173,7 +171,7 @@ export async function getUserTasteProfile() {
             topGenders: ["Pop"],
             energy: 0.5,
             mood: 0.5,
-            vector: (global as any).fallback_vibe || Array(12).fill(0.5)
+            vector: Array(12).fill(0.5)
         };
     }
 
@@ -182,9 +180,9 @@ export async function getUserTasteProfile() {
         let userVibe: number[] | null = null;
 
         try {
-            userVibe = await redis.get(`user_vibe:${userId}`) as number[] | null;
+            userVibe = await safeRedis.get<number[]>(`user_vibe:${userId}`);
         } catch {
-            userVibe = (global as any).fallback_vibe || null;
+            userVibe = null;
         }
 
         if (!userVibe) return { description: 'Discovering...' };

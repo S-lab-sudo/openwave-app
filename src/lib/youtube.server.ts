@@ -6,6 +6,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { safeRedis } from './upstash';
 
 export interface Track {
     id: string;
@@ -37,8 +38,7 @@ interface YouTubeRawData {
     _type?: string;
 }
 
-const directSearchCache = new Map<string, { data: Track[] | Playlist[], timestamp: number }>();
-const CACHE_TTL = 1000 * 60 * 60; // 1 hour
+const REDIS_TTL = 60 * 60 * 24; // 24 hours
 
 /**
  * Server-side search function that uses yt-dlp directly.
@@ -46,17 +46,17 @@ const CACHE_TTL = 1000 * 60 * 60; // 1 hour
  */
 export async function searchYouTubeTracksDirect(query: string): Promise<Track[]> {
     const cacheKey = `tracks:${query}`;
-    const cached = directSearchCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return cached.data as Track[];
-    }
+    
+    // 1. Redis Cache Check
+    const cached = await safeRedis.get<Track[]>(cacheKey);
+    if (cached && cached.length > 0) return cached;
 
     const isWindows = process.platform === 'win32';
     const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
     let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
 
-    if (!isWindows && !fs.existsSync(ytDlpPath)) {
-        ytDlpPath = 'yt-dlp';
+    if (!fs.existsSync(ytDlpPath)) {
+        ytDlpPath = 'yt-dlp'; // Fallback to global
     }
 
     return new Promise((resolve) => {
@@ -67,11 +67,23 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
             '--no-playlist'
         ];
 
-        const proc = spawn(ytDlpPath, args);
+        let proc;
+        try {
+            proc = spawn(ytDlpPath, args);
+        } catch (e) {
+            console.error('Failed to spawn yt-dlp:', e);
+            return resolve([]);
+        }
+
         let output = '';
 
         proc.stdout.on('data', (data: Buffer) => {
             output += data.toString();
+        });
+
+        proc.on('error', (err: any) => {
+            console.error(`yt-dlp spawn error (${ytDlpPath}):`, err.message);
+            resolve([]);
         });
 
         proc.on('close', (code: number) => {
@@ -93,7 +105,7 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
                         return {
                             id: json.id,
                             title: json.title || 'Unknown Title',
-                            artist: json.uploader || json.channel || 'Unknown Artist',
+                            artist: (json.uploader || json.channel || 'Unknown Artist').replace(/ - Topic$/, '').trim(),
                             thumbnail: json.thumbnail || `https://i.ytimg.com/vi/${json.id}/hqdefault.jpg`,
                             duration: duration,
                             youtubeUrl: `https://www.youtube.com/watch?v=${json.id}`,
@@ -104,7 +116,9 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
                     }
                 }).filter((t): t is Track => t !== null);
 
-                directSearchCache.set(cacheKey, { data: tracks, timestamp: Date.now() });
+                if (tracks.length > 0) {
+                    safeRedis.set(cacheKey, tracks, { ex: REDIS_TTL });
+                }
                 resolve(tracks);
             } catch {
                 resolve([]);
@@ -112,9 +126,11 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
         });
 
         setTimeout(() => {
-            proc.kill();
-            resolve([]);
-        }, 10000);
+            if (proc.exitCode === null) {
+                proc.kill();
+                resolve([]);
+            }
+        }, 15000);
     });
 }
 
@@ -123,12 +139,18 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
  * Returns curated playlists based on search query.
  */
 export async function searchYouTubePlaylistsDirect(query: string, limit: number = 5): Promise<Playlist[]> {
+    const cacheKey = `playlists:${query}`;
+    
+    // 1. Redis Cache Check
+    const cached = await safeRedis.get<Playlist[]>(cacheKey);
+    if (cached && cached.length > 0) return cached;
+
     const isWindows = process.platform === 'win32';
     const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
     let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
 
-    if (!isWindows && !fs.existsSync(ytDlpPath)) {
-        ytDlpPath = 'yt-dlp';
+    if (!fs.existsSync(ytDlpPath)) {
+        ytDlpPath = 'yt-dlp'; // Fallback to global
     }
 
     return new Promise((resolve) => {
@@ -138,11 +160,23 @@ export async function searchYouTubePlaylistsDirect(query: string, limit: number 
             '--flat-playlist'
         ];
 
-        const proc = spawn(ytDlpPath, args);
+        let proc;
+        try {
+            proc = spawn(ytDlpPath, args);
+        } catch (e) {
+            console.error('Failed to spawn yt-dlp:', e);
+            return resolve([]);
+        }
+
         let output = '';
 
         proc.stdout.on('data', (data: Buffer) => {
             output += data.toString();
+        });
+        
+        proc.on('error', (err: any) => {
+            console.error(`yt-dlp spawn error (${ytDlpPath}):`, err.message);
+            resolve([]);
         });
 
         proc.on('close', (code: number) => {
@@ -168,7 +202,9 @@ export async function searchYouTubePlaylistsDirect(query: string, limit: number 
                     }
                 }).filter((p): p is Playlist => p !== null);
 
-                directSearchCache.set(`playlists:${query}`, { data: playlists, timestamp: Date.now() });
+                if (playlists.length > 0) {
+                    safeRedis.set(cacheKey, playlists, { ex: REDIS_TTL });
+                }
                 resolve(playlists);
             } catch {
                 resolve([]);
@@ -176,8 +212,10 @@ export async function searchYouTubePlaylistsDirect(query: string, limit: number 
         });
 
         setTimeout(() => {
-            proc.kill();
-            resolve([]);
+            if (proc.exitCode === null) {
+                proc.kill();
+                resolve([]);
+            }
         }, 15000);
     });
 }

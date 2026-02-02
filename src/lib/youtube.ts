@@ -135,21 +135,21 @@ export async function getDynamicEditorsPicks(): Promise<DynamicPlaylist[]> {
 
     const queries = [...TIME_CONTEXTS[timeKey], ...GENRE_KEYWORDS].sort(() => 0.5 - Math.random()).slice(0, 5);
 
-    const picks = await Promise.all(
-        queries.map(async (query) => {
-            const tracks = await searchYouTubeTracks(query);
-            if (tracks.length > 0) {
-                return {
-                    id: `dynamic-${query.toLowerCase().replace(/ /g, '-')}`,
-                    title: query,
-                    description: `Fresh mix curated for ${query.toLowerCase()}.`,
-                    coverUrl: tracks[0].thumbnail,
-                    tracks: tracks
-                } as DynamicPlaylist;
-            }
-            return null;
-        })
-    );
+    const picks: (DynamicPlaylist | null)[] = [];
+    for (const query of queries) {
+        const tracks = await searchYouTubeTracks(query);
+        if (tracks.length > 0) {
+            picks.push({
+                id: `dynamic-${query.toLowerCase().replace(/ /g, '-')}`,
+                title: query,
+                description: `Fresh mix curated for ${query.toLowerCase()}.`,
+                coverUrl: tracks[0].thumbnail,
+                tracks: tracks
+            } as DynamicPlaylist);
+        }
+        // Small delay to let the event loop breathe
+        await new Promise(r => setTimeout(r, 100));
+    }
 
     return picks.filter((p): p is DynamicPlaylist => p !== null);
 }

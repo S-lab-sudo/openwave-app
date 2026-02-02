@@ -40,12 +40,17 @@ export default function Home() {
 
     const fetchData = async () => {
       try {
+        // Priority 1: Instant / Cached core content
         await Promise.allSettled([
           getTrendingTracks('US').then(tracks => setTrendingTracks(tracks)),
-          fetchCommunityPlaylists(),
-          fetchPersonalizedHistory(),
-          fetchNeuralMixes()
+          fetchCommunityPlaylists()
         ]);
+
+        // Priority 2: Deferred / Heavy algorithmic content
+        // We do these serially to avoid network congestion
+        await fetchPersonalizedHistory();
+        await fetchNeuralMixes();
+        
       } catch (error) {
         console.error('Failed to fetch data', error);
       } finally {

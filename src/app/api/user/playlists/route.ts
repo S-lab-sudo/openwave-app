@@ -10,6 +10,10 @@ export async function GET(request: Request) {
     }
 
     try {
+        if (!supabase) {
+            return NextResponse.json({ error: 'Database connection not initialized' }, { status: 500 });
+        }
+
         const { data: playlists, error: pError } = await supabase
             .from('playlists')
             .select(`

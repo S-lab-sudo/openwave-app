@@ -3,6 +3,10 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 
 export async function GET(request: Request) {
     try {
+        if (!supabaseAdmin) {
+            return NextResponse.json({ error: 'Database connection not initialized' }, { status: 500 });
+        }
+
         const { searchParams } = new URL(request.url);
         const userId = searchParams.get('userId');
         const guestId = searchParams.get('guestId');

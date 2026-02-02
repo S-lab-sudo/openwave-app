@@ -10,6 +10,11 @@ export function Providers({ children }: { children: ReactNode }) {
     const { pullFromCloud, pushToCloud } = useContentStore();
 
     useEffect(() => {
+        if (!supabase) {
+            console.warn('Supabase client not initialized - checking environment variables');
+            return;
+        }
+
         // Initial session check
         supabase.auth.getSession().then(({ data: { session } }: any) => {
             if (session) {

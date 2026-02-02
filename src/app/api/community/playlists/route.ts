@@ -6,6 +6,10 @@ export async function GET(request: Request) {
     const id = searchParams.get('id');
 
     try {
+        if (!supabase) {
+            return NextResponse.json({ error: 'Database connection not initialized' }, { status: 500 });
+        }
+
         if (id) {
             const { data, error } = await supabase
                 .from('community_playlists')

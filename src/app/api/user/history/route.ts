@@ -28,7 +28,7 @@ export async function GET(request: Request) {
         if (error) throw error;
 
         // Map back to standard track format
-        const history = data.map(item => item.track_metadata);
+        const history = data.map((item: any) => item.track_metadata);
 
         return NextResponse.json({ history });
     } catch (error: any) {

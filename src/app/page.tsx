@@ -52,7 +52,7 @@ export default function Home() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
-    fetch('http://ip-api.com/json/')
+    fetch('https://ipapi.co/json/')
       .then(res => res.json())
       .then(data => {
         if (data && data.country) {

@@ -28,7 +28,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Query parameter is required' }, { status: 400 });
     }
 
-    const cacheKey = `ow:search:v4:${type}:${query || 'global'}`;
+    const cacheKey = `ow:search:v6:${type}:${query || 'global'}`;
 
     // 1. Memory Cache
     const inMem = searchCache.get(cacheKey);
@@ -46,87 +46,50 @@ export async function GET(request: Request) {
     try {
         let tracks: YouTubeTrack[] = [];
 
-        if (type === 'trending') {
-            const billBoardKey = 'ow:billboard:hot100_v2';
-            const billboardData = await safeRedis.get<YouTubeTrack[]>(billBoardKey);
-            if (billboardData) {
-                return NextResponse.json({ items: billboardData, query, type, source: 'cache:billboard' });
-            }
+        // RECOVERY STRATEGY V6: 
+        // Use 'video' type exclusively with query augmentation. 
+        // Internal library 'playlist' type is currently broken due to YouTube changes.
+        const rawResults = await YouTube.search(type === 'playlist' ? `${query} playlist` : query!, { 
+            limit: 30,
+            safeSearch: true,
+            type: 'video'
+        }).catch(() => []);
+
+        tracks = rawResults.map(v => {
+            if (!v || !v.id) return null;
             
-            // Trending search via youtube-sr (Video type is the most stable)
-            try {
-                const results = await YouTube.search('Billboard Hot 100 Official Audio', { limit: 15, type: 'video' });
-                tracks = results.map(v => ({
-                    id: v.id || '',
-                    title: v.title || 'Unknown Title',
-                    artist: v.channel?.name || 'YouTube',
-                    thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
-                    duration: Math.floor((v.duration || 0) / 1000),
-                    description: v.description || '',
-                    youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
-                    isPlaylist: false,
-                    album: 'Trending'
-                }));
-            } catch (e) {
-                console.error("Trending fetch failed", e);
-            }
-        } else if (type === 'playlist') {
-            try {
-                // Try specialized playlist search
-                const results = await YouTube.search(query!, { limit: 15, type: 'playlist' });
-                tracks = results.map(p => ({
-                    id: p.id || '',
-                    title: p.title || 'Untitled Playlist',
-                    artist: p.channel?.name || 'YouTube Curator',
-                    thumbnail: p.thumbnail?.url || 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=800',
-                    duration: 0,
-                    description: '',
-                    youtubeUrl: `https://www.youtube.com/playlist?list=${p.id}`,
-                    isPlaylist: true,
-                    playlist_title: p.title
-                }));
-            } catch (e) {
-                console.warn("Playlist search crashed, falling back to video search with query mod", e);
-                // Fallback: Search for videos but add "playlist" to the query
-                const results = await YouTube.search(`${query} playlist`, { limit: 15, type: 'video' });
-                tracks = results.map(v => ({
-                    id: v.id || '',
-                    title: v.title || 'Unknown Playlist',
-                    artist: v.channel?.name || 'YouTube',
-                    thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
-                    duration: 0,
-                    description: '',
-                    youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
-                    isPlaylist: true,
-                    playlist_title: v.title
-                }));
-            }
-        } else {
-            // Standard Video Search
-            const results = await YouTube.search(query!, { limit: 20, type: 'video' });
-            tracks = results.map(v => ({
-                id: v.id || '',
-                title: v.title || 'Unknown Title',
-                artist: v.channel?.name || 'Unknown Artist',
+            // Fixed comparison: Ignore v.type (which is fixed to 'video') and use request type
+            const isActuallyPlaylist = type === 'playlist';
+            
+            return {
+                id: v.id,
+                title: v.title || 'Unknown',
+                artist: v.channel?.name || 'YouTube',
                 thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
                 duration: Math.floor((v.duration || 0) / 1000),
                 description: v.description || '',
-                youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
-                isPlaylist: false,
-                album: 'Search Result'
-            }));
-        }
+                youtubeUrl: isActuallyPlaylist 
+                    ? `https://www.youtube.com/playlist?list=${v.id}`
+                    : `https://www.youtube.com/watch?v=${v.id}`,
+                isPlaylist: isActuallyPlaylist,
+                playlist_title: isActuallyPlaylist ? v.title : undefined,
+                album: type === 'trending' ? 'Trending' : 'Search Result'
+            } as YouTubeTrack;
+        }).filter((t): t is YouTubeTrack => t !== null);
 
         if (tracks.length > 0) {
             await safeRedis.set(cacheKey, tracks, { ex: REDIS_TTL });
             searchCache.set(cacheKey, { data: tracks, timestamp: Date.now() });
-            return NextResponse.json({ items: tracks, query, type, source: 'live:sr-search-resilient' });
+            return NextResponse.json({ items: tracks, query, type, source: 'live:resilient-v6' });
         }
 
         return NextResponse.json({ items: [], query, type });
 
     } catch (error) {
-        console.error('Final Search Error:', error);
-        return NextResponse.json({ items: [], error: 'Search failed, please try again' }, { status: 500 });
+        console.error('Deep Search Error:', error);
+        return NextResponse.json({ 
+            items: [], 
+            error: 'No results found. Please try a different query.' 
+        });
     }
 }

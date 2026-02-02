@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { safeRedis } from './upstash';
+import youtubedl from 'youtube-dl-exec';
 
 export interface Track {
     id: string;
@@ -41,6 +42,26 @@ interface YouTubeRawData {
 const REDIS_TTL = 60 * 60 * 24; // 24 hours
 
 /**
+ * Advanced Binary Resolver for Cross-Platform Stability (Windows/Linux/Production)
+ */
+function getBinaryPath(): string {
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+    
+    // Check local project bin
+    const projectBin = path.join(process.cwd(), 'bin', binaryName);
+    if (fs.existsSync(projectBin)) return projectBin;
+
+    // Check node_modules/youtube-dl-exec version
+    // On Vercel, the binary is sometimes placed here
+    const moduleBin = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', binaryName);
+    if (fs.existsSync(moduleBin)) return moduleBin;
+
+    // Last resort: hope it's in the global PATH
+    return binaryName; 
+}
+
+/**
  * Server-side search function that uses yt-dlp directly.
  * Use this in API routes only.
  */
@@ -51,13 +72,7 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
     const cached = await safeRedis.get<Track[]>(cacheKey);
     if (cached && cached.length > 0) return cached;
 
-    const isWindows = process.platform === 'win32';
-    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
-    let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
-
-    if (!fs.existsSync(ytDlpPath)) {
-        ytDlpPath = 'yt-dlp'; // Fallback to global
-    }
+    const ytDlpPath = getBinaryPath();
 
     return new Promise((resolve) => {
         const args = [
@@ -69,7 +84,8 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
 
         let proc;
         try {
-            proc = spawn(ytDlpPath, args);
+            // shell: true is critical for Windows paths with spaces or special characters
+            proc = spawn(ytDlpPath, args, { shell: process.platform === 'win32' });
         } catch (e) {
             console.error('Failed to spawn yt-dlp:', e);
             return resolve([]);
@@ -145,13 +161,7 @@ export async function searchYouTubePlaylistsDirect(query: string, limit: number 
     const cached = await safeRedis.get<Playlist[]>(cacheKey);
     if (cached && cached.length > 0) return cached;
 
-    const isWindows = process.platform === 'win32';
-    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
-    let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
-
-    if (!fs.existsSync(ytDlpPath)) {
-        ytDlpPath = 'yt-dlp'; // Fallback to global
-    }
+    const ytDlpPath = getBinaryPath();
 
     return new Promise((resolve) => {
         const args = [
@@ -162,7 +172,7 @@ export async function searchYouTubePlaylistsDirect(query: string, limit: number 
 
         let proc;
         try {
-            proc = spawn(ytDlpPath, args);
+            proc = spawn(ytDlpPath, args, { shell: process.platform === 'win32' });
         } catch (e) {
             console.error('Failed to spawn yt-dlp:', e);
             return resolve([]);

@@ -4,6 +4,26 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+/**
+ * Advanced Binary Resolver for Cross-Platform Stability
+ */
+function getBinaryPath(): string {
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+    
+    const root = process.cwd();
+    const possiblePaths = [
+        path.join(root, 'bin', binaryName),
+        path.join(root, 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
+    ];
+
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) return p;
+    }
+
+    return binaryName; // Fallback to global
+}
+
 export async function POST(request: Request) {
     try {
         const { url, title, artist, thumbnail } = await request.json();
@@ -13,13 +33,8 @@ export async function POST(request: Request) {
         }
 
         // 1. Setup Environment
+        const ytDlpPath = getBinaryPath();
         const isWindows = process.platform === 'win32';
-        const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
-        let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
-
-        if (!isWindows && !fs.existsSync(ytDlpPath)) {
-            ytDlpPath = 'yt-dlp';
-        }
 
         const downloadsPath = path.join(os.homedir(), 'Downloads', 'OpenWave');
         if (!fs.existsSync(downloadsPath)) {
@@ -32,7 +47,7 @@ export async function POST(request: Request) {
         const audioTemplate = path.join(downloadsPath, `${baseName}.%(ext)s`);
         const thumbPath = path.join(downloadsPath, `${baseName}.jpg`);
 
-        // 2. Thumbnail Check (Root Fix Part 1)
+        // 2. Thumbnail Check
         if (thumbnail && !fs.existsSync(thumbPath)) {
             try {
                 const thumbRes = await fetch(thumbnail);
@@ -65,17 +80,6 @@ export async function POST(request: Request) {
         }
 
         // 4. Download Execution
-        if (!isWindows && ytDlpPath === 'yt-dlp') {
-            // Check if global exists
-            try {
-                // Testing spawn
-            } catch (e) {
-                throw new Error('yt-dlp engine not found in environment.');
-            }
-        } else if (!fs.existsSync(ytDlpPath)) {
-            throw new Error('yt-dlp binary not found in bin/ directory.');
-        }
-
         const args = [
             url,
             '-f', 'bestaudio[ext=m4a]/bestaudio',
@@ -84,7 +88,7 @@ export async function POST(request: Request) {
             '--no-warnings'
         ];
 
-        const downloadProcess = spawn(ytDlpPath, args);
+        const downloadProcess = spawn(ytDlpPath, args, { shell: isWindows });
         let errorMessage = '';
 
         await new Promise((resolve, reject) => {
@@ -92,9 +96,13 @@ export async function POST(request: Request) {
                 errorMessage += data.toString();
             });
 
+            downloadProcess.on('error', (err: any) => {
+                reject(new Error(`Failed to start download process: ${err.message}`));
+            });
+
             downloadProcess.on('close', (code) => {
                 if (code === 0) resolve(true);
-                else reject(new Error(`yt-dlp engine failed: ${errorMessage}`));
+                else reject(new Error(`yt-dlp engine failed with code ${code}: ${errorMessage}`));
             });
         });
 

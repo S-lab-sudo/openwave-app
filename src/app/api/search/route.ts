@@ -8,9 +8,6 @@ const searchCache = new Map<string, { data: YouTubeTrack[], timestamp: number }>
 const CACHE_TTL = 1000 * 60 * 60 * 2; // 2 hours in-memory
 const REDIS_TTL = 60 * 60 * 24; // 24 hours in Redis
 
-// Terms to exclude from results to keep search "clean"
-const EXCLUSION_TERMS = ['lyrics', 'cover', 'live', 'acoustic', 'remix', 'playlist', 'countdown', 'predictions', 'top 20', 'top 50', 'top 10', 'chart hits', 'full album'];
-
 interface YouTubeTrack {
     id: string;
     title: string;
@@ -24,25 +21,37 @@ interface YouTubeTrack {
     album?: string;
 }
 
-async function runYtDlp(args: string[], type: string): Promise<YouTubeTrack[]> {
+/**
+ * Advanced Binary Resolver for Cross-Platform Stability
+ */
+function getBinaryPath(): string {
     const isWindows = process.platform === 'win32';
     const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
     
-    // Try project root bin first
-    let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
+    const root = process.cwd();
+    const possiblePaths = [
+        path.join(root, 'bin', binaryName),
+        path.join(root, 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
+    ];
 
-    // ROOT FIX: Fallback logic for all platforms
-    if (!fs.existsSync(ytDlpPath)) {
-        console.warn(`Local yt-dlp not found at ${ytDlpPath}. Falling back to global 'yt-dlp' command.`);
-        ytDlpPath = 'yt-dlp'; 
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) return p;
     }
+
+    return binaryName; // Fallback to global
+}
+
+async function runYtDlp(args: string[], type: string): Promise<YouTubeTrack[]> {
+    const ytDlpPath = getBinaryPath();
+    const isWindows = process.platform === 'win32';
 
     return new Promise((resolve) => {
         let childProcess;
         try {
-            childProcess = spawn(ytDlpPath, args);
+            // shell: true is critical for Windows paths with spaces
+            childProcess = spawn(ytDlpPath, args, { shell: isWindows });
         } catch (e) {
-            console.error('Critical spawn error:', e);
+            console.error('[Search API] Critical spawn error:', e);
             return resolve([]);
         }
 
@@ -58,17 +67,13 @@ async function runYtDlp(args: string[], type: string): Promise<YouTubeTrack[]> {
         });
 
         childProcess.on('error', (err: any) => {
-            if (err.code === 'ENOENT') {
-                console.error('yt-dlp binary not found. Please ensure it is in the /bin folder or installed globally.');
-            } else {
-                console.error('Failed to start yt-dlp:', err);
-            }
+            console.error(`[Search API] FATAL: Failed to start yt-dlp at "${ytDlpPath}":`, err.message);
             resolve([]);
         });
 
         childProcess.on('close', (code) => {
             if (code !== 0) {
-                console.error('yt-dlp failed with code:', code, errorOutput);
+                console.error('[Search API] yt-dlp failed with code:', code, errorOutput);
                 return resolve([]);
             }
 
@@ -82,14 +87,6 @@ async function runYtDlp(args: string[], type: string): Promise<YouTubeTrack[]> {
 
                         const titleLower = (json.title || '').toLowerCase();
                         if (!titleLower) return null;
-
-                        // Filter out garbage results
-                        const isExcluded = type !== 'playlist' && ['countdown', 'predictions', 'top 20', 'top 50', 'top 10', 'chart hits', 'full album'].some(term => {
-                            const regex = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-                            return regex.test(titleLower);
-                        });
-
-                        if (isExcluded) return null;
 
                         const duration = Math.floor(json.duration || 0);
                         // Filter out long mixes for normal songs
@@ -144,7 +141,6 @@ async function runYtDlp(args: string[], type: string): Promise<YouTubeTrack[]> {
             }
         });
 
-        // Kill process after 30 seconds to prevent leak
         setTimeout(() => {
             if (childProcess.exitCode === null) {
                 childProcess.kill();
@@ -165,16 +161,15 @@ export async function GET(request: Request) {
 
     const cacheKey = `ow:search:${type}:${query || 'global'}`;
 
-    // 1. IN-MEMORY CACHE (Super fast)
+    // 1. IN-MEMORY CACHE
     const inMem = searchCache.get(cacheKey);
     if (inMem && Date.now() - inMem.timestamp < CACHE_TTL) {
         return NextResponse.json({ items: inMem.data, query, type, source: 'cache:memory' });
     }
 
-    // 2. REDIS CACHE (Persistent across restarts)
+    // 2. REDIS CACHE
     const cachedRedis = await safeRedis.get<YouTubeTrack[]>(cacheKey);
     if (cachedRedis && cachedRedis.length > 0) {
-        // Sync to memory for next time
         searchCache.set(cacheKey, { data: cachedRedis, timestamp: Date.now() });
         return NextResponse.json({ items: cachedRedis, query, type, source: 'cache:redis' });
     }
@@ -183,15 +178,12 @@ export async function GET(request: Request) {
         let args: string[] = [];
 
         if (type === 'trending') {
-            // Billboard logic is already cached within its own block usually, 
-            // but let's keep it here for specialized handling.
             const billBoardKey = 'ow:billboard:hot100';
             const billboardData = await safeRedis.get<YouTubeTrack[]>(billBoardKey);
             if (billboardData) {
                 return NextResponse.json({ items: billboardData, query, type, source: 'cache:billboard' });
             }
             
-            // If no billboard cache, we fall back to a standard trending search
             args = [
                 `ytsearch15:Billboard Hot 100 Official Audio ${new Date().getFullYear()}`,
                 '--dump-json',
@@ -230,7 +222,6 @@ export async function GET(request: Request) {
         const tracks = await runYtDlp(args, type);
 
         if (tracks.length > 0) {
-            // Persist to Redis and Memory
             await safeRedis.set(cacheKey, tracks, { ex: REDIS_TTL });
             searchCache.set(cacheKey, { data: tracks, timestamp: Date.now() });
             return NextResponse.json({ items: tracks, query, type, source: 'live:scrape' });

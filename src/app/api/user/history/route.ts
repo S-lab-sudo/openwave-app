@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { SupabaseHistoryEntry } from '@/types/database';
 
 export async function GET(request: Request) {
     try {
@@ -32,11 +33,11 @@ export async function GET(request: Request) {
         if (error) throw error;
 
         // Map back to standard track format
-        const history = data.map((item: any) => item.track_metadata);
+        const history = (data as unknown as SupabaseHistoryEntry[]).map(item => item.track_metadata);
 
         return NextResponse.json({ history });
-    } catch (error: any) {
-        console.error('Fetch History Error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Fetch History Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }

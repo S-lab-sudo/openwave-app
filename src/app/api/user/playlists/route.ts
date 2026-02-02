@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { SupabasePlaylist, SupabaseTrack } from '@/types/database';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -28,22 +29,22 @@ export async function GET(request: Request) {
         if (pError) throw pError;
 
         // Formatter: Convert DB structure back to app's DynamicPlaylist format
-        const formatted = (playlists || []).map((p: any) => ({
+        const formatted = (playlists as unknown as SupabasePlaylist[] || []).map(p => ({
             id: p.id,
             title: p.name,
             description: p.description || '',
             coverUrl: p.cover_url || '',
             isPublic: p.is_public ?? true,
             tracks: (p.playlist_tracks || [])
-                .sort((a: any, b: any) => a.position - b.position)
-                .map((pt: any) => pt.tracks)
-                .filter((t: any) => t !== null)
+                .sort((a, b) => a.position - b.position)
+                .map(pt => pt.tracks as SupabaseTrack)
+                .filter(t => t !== null)
         }));
 
         return NextResponse.json({ items: formatted });
-    } catch (error: any) {
-        console.error('Fetch Playlists Error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Fetch Playlists Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }
 

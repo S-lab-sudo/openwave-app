@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { CommunityPlaylistEntry } from '@/types/database';
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
@@ -44,22 +45,22 @@ export async function GET(request: Request) {
                     .limit(10);
 
                 if (fallback.error) throw fallback.error;
-                return NextResponse.json({ items: formatPlaylists(fallback.data) });
+                return NextResponse.json({ items: formatPlaylists(fallback.data as unknown as CommunityPlaylistEntry[]) });
             }
             console.error('Fetch community playlists error:', error);
             return NextResponse.json({ error: error.message }, { status: 500 });
         }
 
-        return NextResponse.json({ items: formatPlaylists(data) });
-    } catch (error: any) {
-        console.error('Community Fetch Error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json({ items: formatPlaylists(data as unknown as CommunityPlaylistEntry[]) });
+    } catch (error) {
+        console.error('Community Fetch Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
     }
 }
 
 // Helper to keep the main GET clean
-function formatPlaylists(data: any[]) {
-    return (data || []).map((p: any) => ({
+function formatPlaylists(data: CommunityPlaylistEntry[]) {
+    return (data || []).map(p => ({
         id: p.id,
         title: p.title,
         description: p.description || '',

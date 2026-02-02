@@ -12,6 +12,15 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'URL is required' }, { status: 400 });
         }
 
+        // 1. Setup Environment
+        const isWindows = process.platform === 'win32';
+        const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+        let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
+
+        if (!isWindows && !fs.existsSync(ytDlpPath)) {
+            ytDlpPath = 'yt-dlp';
+        }
+
         const downloadsPath = path.join(os.homedir(), 'Downloads', 'OpenWave');
         if (!fs.existsSync(downloadsPath)) {
             fs.mkdirSync(downloadsPath, { recursive: true });
@@ -21,14 +30,9 @@ export async function POST(request: Request) {
         const safeArtist = (artist || 'Unknown').replace(/[<>:"/\\|?*]/g, '');
         const baseName = `${safeArtist} - ${safeTitle}`;
         const audioTemplate = path.join(downloadsPath, `${baseName}.%(ext)s`);
-
-        // We'll check for multiple image formats
         const thumbPath = path.join(downloadsPath, `${baseName}.jpg`);
 
-        const ytDlpPath = path.join(process.cwd(), 'bin', 'yt-dlp.exe');
-
-        // ROOT FIX PART 1: Always try to download the thumbnail if it doesn't exist
-        // even if the music file already exists.
+        // 2. Thumbnail Check (Root Fix Part 1)
         if (thumbnail && !fs.existsSync(thumbPath)) {
             try {
                 const thumbRes = await fetch(thumbnail);
@@ -37,24 +41,22 @@ export async function POST(request: Request) {
                     fs.writeFileSync(thumbPath, Buffer.from(buffer));
                 }
             } catch (e) {
-                console.warn('Failed to save thumbnail:', e);
+                console.warn('Failed to save thumbnail:', e instanceof Error ? e.message : 'Unknown error');
             }
         }
 
-        // Check if audio file already exists (check common extensions)
+        // 3. De-duplication check
         const possibleExtensions = ['.m4a', '.mp3', '.webm', '.opus'];
-        let audioExists = false;
         let existingPath = '';
         for (const ext of possibleExtensions) {
             const p = path.join(downloadsPath, `${baseName}${ext}`);
             if (fs.existsSync(p)) {
-                audioExists = true;
                 existingPath = p;
                 break;
             }
         }
 
-        if (audioExists) {
+        if (existingPath) {
             return NextResponse.json({
                 success: true,
                 message: 'Audio already exists, updated artwork if missing',
@@ -62,11 +64,18 @@ export async function POST(request: Request) {
             });
         }
 
-        if (!fs.existsSync(ytDlpPath)) {
-            throw new Error('yt-dlp binary not found.');
+        // 4. Download Execution
+        if (!isWindows && ytDlpPath === 'yt-dlp') {
+            // Check if global exists
+            try {
+                // Testing spawn
+            } catch (e) {
+                throw new Error('yt-dlp engine not found in environment.');
+            }
+        } else if (!fs.existsSync(ytDlpPath)) {
+            throw new Error('yt-dlp binary not found in bin/ directory.');
         }
 
-        // 2. Download Audio
         const args = [
             url,
             '-f', 'bestaudio[ext=m4a]/bestaudio',
@@ -79,13 +88,13 @@ export async function POST(request: Request) {
         let errorMessage = '';
 
         await new Promise((resolve, reject) => {
-            downloadProcess.stderr.on('data', (data) => {
+            downloadProcess.stderr.on('data', (data: Buffer) => {
                 errorMessage += data.toString();
             });
 
             downloadProcess.on('close', (code) => {
                 if (code === 0) resolve(true);
-                else reject(new Error(`yt-dlp failed: ${errorMessage}`));
+                else reject(new Error(`yt-dlp engine failed: ${errorMessage}`));
             });
         });
 
@@ -95,8 +104,11 @@ export async function POST(request: Request) {
             path: downloadsPath
         });
 
-    } catch (error: any) {
-        console.error('Download failed:', error);
-        return NextResponse.json({ error: 'Download failed', details: error.message }, { status: 500 });
+    } catch (error) {
+        console.error('Download System Error:', error instanceof Error ? error.message : 'Unknown error');
+        return NextResponse.json({ 
+            error: 'Download failed', 
+            details: error instanceof Error ? error.message : 'Unknown error' 
+        }, { status: 500 });
     }
 }

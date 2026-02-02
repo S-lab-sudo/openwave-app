@@ -2,22 +2,39 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { redis } from '@/lib/upstash';
+import { safeRedis } from '@/lib/upstash';
 
-const searchCache = new Map<string, { data: any, timestamp: number }>();
+const searchCache = new Map<string, { data: YouTubeTrack[], timestamp: number }>();
 // Cache for individual song searches (Artist + Title -> YT Result)
-const trendingSongCache = new Map<string, any>();
+const trendingSongCache = new Map<string, YouTubeTrack>();
 const CACHE_TTL = 1000 * 60 * 60 * 2; // 2 hours for stability
 const WEEK_IN_SECONDS = 60 * 60 * 24 * 7;
 
 // Terms to exclude from results to keep search "clean"
 const EXCLUSION_TERMS = ['lyrics', 'cover', 'live', 'acoustic', 'remix', 'playlist', 'countdown', 'predictions', 'top 20', 'top 50', 'top 10', 'chart hits', 'full album'];
 
-async function runYtDlp(args: string[], type: string): Promise<any[]> {
-    const ytDlpPath = path.join(process.cwd(), 'bin', 'yt-dlp.exe');
-    if (!fs.existsSync(ytDlpPath)) {
-        console.error('yt-dlp binary not found');
-        return [];
+interface YouTubeTrack {
+    id: string;
+    title: string;
+    artist: string;
+    thumbnail: string;
+    duration: number;
+    description: string;
+    youtubeUrl: string;
+    isPlaylist: boolean;
+    playlist_title?: string;
+    album?: string;
+}
+
+async function runYtDlp(args: string[], type: string): Promise<YouTubeTrack[]> {
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+    let ytDlpPath = path.join(process.cwd(), 'bin', binaryName);
+
+    // ROOT FIX: On Vercel (Linux), if the binary in /bin fails or is missing, 
+    // we fallback to the environment's version or a global one.
+    if (!isWindows && !fs.existsSync(ytDlpPath)) {
+        ytDlpPath = 'yt-dlp'; 
     }
 
     return new Promise((resolve) => {
@@ -25,11 +42,11 @@ async function runYtDlp(args: string[], type: string): Promise<any[]> {
         let output = '';
         let errorOutput = '';
 
-        childProcess.stdout.on('data', (data) => {
+        childProcess.stdout.on('data', (data: Buffer) => {
             output += data.toString();
         });
 
-        childProcess.stderr.on('data', (data) => {
+        childProcess.stderr.on('data', (data: Buffer) => {
             errorOutput += data.toString();
         });
 
@@ -41,17 +58,15 @@ async function runYtDlp(args: string[], type: string): Promise<any[]> {
 
             try {
                 const lines = output.trim().split('\n');
-                const tracks = lines.map((line: any) => {
+                const tracks = lines.map((line) => {
                     if (!line.trim()) return null;
                     try {
                         const json = JSON.parse(line);
                         if (!json || !json.id) return null;
 
-                        // Exclusion Filter: Check if title contains any unwanted terms
                         const titleLower = (json.title || '').toLowerCase();
                         if (!titleLower) return null;
 
-                        // Exclusion Filter: Check for junk terms
                         const isExcluded = type !== 'playlist' && ['countdown', 'predictions', 'top 20', 'top 50', 'top 10', 'chart hits', 'full album'].some(term => {
                             const regex = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
                             return regex.test(titleLower);
@@ -59,7 +74,6 @@ async function runYtDlp(args: string[], type: string): Promise<any[]> {
 
                         if (isExcluded) return null;
 
-                        // DURATION FILTER:
                         const isSongSearch = type === 'trending' || type === 'search';
                         const duration = Math.floor(json.duration || 0);
                         if (isSongSearch && duration > 720) return null;
@@ -74,20 +88,17 @@ async function runYtDlp(args: string[], type: string): Promise<any[]> {
                                 .trim();
                         };
 
-                        const isPlaylistResult = json._type === 'playlist' || (json.id && json.id.toString().startsWith('PL'));
+                        const isPlaylistResult = json._type === 'playlist' || (json.id && (json.id as string).startsWith('PL'));
 
-                        // Strict filter: match requested type to result type
                         if (type === 'playlist' && !isPlaylistResult) return null;
                         if (type !== 'playlist' && isPlaylistResult) return null;
 
-                        // Enhanced Thumbnail Extraction: Find the best quality available
                         let highResThumbnail = json.thumbnail;
                         if (json.thumbnails && json.thumbnails.length > 0) {
-                            const best = json.thumbnails.sort((a: any, b: any) => (b.width || 0) - (a.width || 0))[0];
-                            highResThumbnail = best.url || best.src || highResThumbnail;
+                            const best = (json.thumbnails as { width: number, url: string }[]).sort((a, b) => (b.width || 0) - (a.width || 0))[0];
+                            highResThumbnail = best.url || highResThumbnail;
                         }
 
-                        // Robust fallback for missing images
                         const fallbackUrl = isPlaylistResult
                             ? 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=800'
                             : `https://i.ytimg.com/vi/${json.id}/hqdefault.jpg`;
@@ -104,11 +115,11 @@ async function runYtDlp(args: string[], type: string): Promise<any[]> {
                                 : `https://www.youtube.com/watch?v=${json.id}`,
                             isPlaylist: isPlaylistResult,
                             playlist_title: json.playlist_title
-                        };
+                        } as YouTubeTrack;
                     } catch (e) {
                         return null;
                     }
-                }).filter(Boolean);
+                }).filter((t): t is YouTubeTrack => t !== null);
 
                 resolve(tracks);
             } catch (err) {
@@ -144,30 +155,30 @@ export async function GET(request: Request) {
             try {
                 // 1. REDIS CHECK
                 const redisKey = 'billboard_hot_100_v1';
-                const cachedData = await redis.get<any[]>(redisKey);
+                const cachedData = await safeRedis.get<any[]>(redisKey);
                 if (cachedData && cachedData.length > 0) {
                     return NextResponse.json({ items: cachedData, query, type, source: 'cache:redis' });
                 }
 
                 // 2. FETCH
                 const chartRes = await fetch('https://raw.githubusercontent.com/mhollingshead/billboard-hot-100/main/recent.json');
-                const chartData = await chartRes.json();
+                const chartData = await chartRes.json() as { data: { song: string, artist: string, this_week: number }[] };
                 const chartHits = chartData.data.slice(0, 50);
 
-                const allTracks: any[] = [];
+                const allTracks: YouTubeTrack[] = [];
                 for (let i = 0; i < chartHits.length; i += 10) {
                     const batch = chartHits.slice(i, i + 10);
                     const batchResults = await Promise.all(
-                        batch.map(async (song: any) => {
+                        batch.map(async (song) => {
                             const hitArgs = [
-                                `ytsearch2:"${song.song}" "${song.artist}" official audio -billboard -predictions -chart`,
+                                `ytsearch1:"${song.song}" "${song.artist}" official audio -billboard -predictions -chart`,
                                 '--dump-json',
                                 '--flat-playlist',
                                 '--no-playlist'
                             ];
                             const tracks = await runYtDlp(hitArgs, 'search');
 
-                            const bestMatch = tracks.find((t: any) => {
+                            const bestMatch = tracks.find((t) => {
                                 const titleLower = t.title.toLowerCase();
                                 const songLower = song.song.toLowerCase();
                                 const artistLower = song.artist.toLowerCase();
@@ -176,19 +187,19 @@ export async function GET(request: Request) {
                             });
 
                             if (bestMatch) {
-                                const finalSong = { ...bestMatch };
+                                const finalSong: YouTubeTrack = { ...bestMatch };
                                 finalSong.album = `Billboard Hot 100 #${song.this_week}`;
                                 return finalSong;
                             }
                             return null;
                         })
                     );
-                    allTracks.push(...batchResults.filter(Boolean));
+                    allTracks.push(...batchResults.filter((t): t is YouTubeTrack => t !== null));
                 }
 
                 if (allTracks.length > 0) {
                     // 3. CACHE
-                    await redis.set(redisKey, JSON.stringify(allTracks), { ex: WEEK_IN_SECONDS });
+                    await safeRedis.set(redisKey, JSON.stringify(allTracks), { ex: WEEK_IN_SECONDS });
                     return NextResponse.json({ items: allTracks, query, type, source: 'live:refreshed' });
                 }
             } catch (e) {

@@ -52,14 +52,39 @@ export default function Home() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
-    fetch('https://ipapi.co/json/')
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.country) {
+    
+    // ROOT FIX: Implement geolocation caching to avoid 429 errors
+    const CACHE_KEY = 'ow_user_country';
+    const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
+    
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      const { country, timestamp } = JSON.parse(cached);
+      if (Date.now() - timestamp < CACHE_EXPIRY) {
+        setUserCountry(country);
+        return;
+      }
+    }
+
+    const fetchCountry = async () => {
+      try {
+        const res = await fetch('https://ipapi.co/json/');
+        if (!res.ok) throw new Error('Geolocation rate limit or failure');
+        const data = await res.json();
+        
+        if (data?.country) {
           setUserCountry(data.country);
+          localStorage.setItem(CACHE_KEY, JSON.stringify({
+            country: data.country,
+            timestamp: Date.now()
+          }));
         }
-      })
-      .catch(() => console.log("Geolocation fallback to global"));
+      } catch (err) {
+        console.warn("Geolocation fallback to global", err instanceof Error ? err.message : 'Unknown error');
+      }
+    };
+
+    fetchCountry();
   }, []);
 
   useEffect(() => {

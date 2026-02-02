@@ -211,7 +211,8 @@ export default function PlaylistView() {
             setPlaylist(normalized);
             setEditTitle(normalized.title);
             setEditDesc(normalized.description || '');
-        } else if (id && id.toString().startsWith('PL')) {
+        } else if (id && id.toString().length > 5) {
+            // Handle any YouTube ID (PL playlists or single video mixes)
             fetchDynamicPlaylist(id as string);
         } else {
             setPlaylist(null);

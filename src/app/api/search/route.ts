@@ -28,7 +28,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Query parameter is required' }, { status: 400 });
     }
 
-    const cacheKey = `ow:search:v6:${type}:${query || 'global'}`;
+    const cacheKey = `ow:search:v8:${type}:${query || 'global'}`;
 
     // 1. Memory Cache
     const inMem = searchCache.get(cacheKey);
@@ -46,50 +46,145 @@ export async function GET(request: Request) {
     try {
         let tracks: YouTubeTrack[] = [];
 
-        // RECOVERY STRATEGY V6: 
-        // Use 'video' type exclusively with query augmentation. 
-        // Internal library 'playlist' type is currently broken due to YouTube changes.
-        const rawResults = await YouTube.search(type === 'playlist' ? `${query} playlist` : query!, { 
-            limit: 30,
-            safeSearch: true,
-            type: 'video'
-        }).catch(() => []);
+        // CASE 1: Playlist Tracks (Fetching the contents of a playlist or video ID)
+        if (type === 'playlist_tracks') {
+            if (query?.startsWith('PL')) {
+                try {
+                    // Try native fetching for real playlists
+                    const playlist = await YouTube.getPlaylist(query);
+                    // fetch() retrieves the videos. We can specify a limit.
+                    const fetchedPlaylist = await playlist.fetch(50); 
+                    
+                    tracks = fetchedPlaylist.videos.map(v => ({
+                        id: v.id || '',
+                        title: v.title || 'Unknown',
+                        artist: v.channel?.name || 'YouTube',
+                        thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+                        duration: Math.floor((v.duration || 0) / 1000),
+                        description: '',
+                        youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
+                        isPlaylist: false,
+                        playlist_title: playlist.title
+                    }));
 
-        tracks = rawResults.map(v => {
-            if (!v || !v.id) return null;
-            
-            // Fixed comparison: Ignore v.type (which is fixed to 'video') and use request type
-            const isActuallyPlaylist = type === 'playlist';
-            
-            return {
-                id: v.id,
+                    if (tracks.length === 0) throw new Error("Empty playlist");
+                } catch (e) {
+                    console.warn("Native playlist fetch failed, trying search fallback", e);
+                    // If native fetch fails, try to search for tracks that might be in it
+                    const results = await YouTube.search(query, { limit: 25, type: 'video' });
+                    tracks = results.map(v => ({
+                        id: v.id || '',
+                        title: v.title || 'Unknown',
+                        artist: v.channel?.name || 'YouTube',
+                        thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+                        duration: Math.floor((v.duration || 0) / 1000),
+                        description: '',
+                        youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
+                        isPlaylist: false,
+                        playlist_title: 'YouTube Collection'
+                    }));
+                }
+            } else {
+                // NEURAL MIX LOGIC: It's a single video ID but requested as a playlist contents.
+                // We fetch the video details, then search for related content to build a "Mix".
+                try {
+                    const video = await YouTube.getVideo(`https://www.youtube.com/watch?v=${query}`).catch(() => null);
+                    const seedTitle = video?.title || query!;
+                    
+                    // Search for a mix based on the seed title
+                    const results = await YouTube.search(`${seedTitle} mix`, { limit: 20, type: 'video' });
+                    
+                    tracks = results.map(v => ({
+                        id: v.id || '',
+                        title: v.title || 'Frequency Pattern',
+                        artist: v.channel?.name || 'OpenWave Curator',
+                        thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+                        duration: Math.floor((v.duration || 0) / 1000),
+                        description: '',
+                        youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
+                        isPlaylist: false,
+                        playlist_title: seedTitle ? `${seedTitle} Mix` : 'Neural Connection'
+                    }));
+                } catch (e) {
+                    // Last resort fallout
+                    const results = await YouTube.search(query!, { limit: 15, type: 'video' });
+                    tracks = results.map(v => ({
+                        id: v.id || '',
+                        title: v.title || 'Frequency',
+                        artist: v.channel?.name || 'Unknown',
+                        thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+                        duration: Math.floor((v.duration || 0) / 1000),
+                        description: '',
+                        youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
+                        isPlaylist: false,
+                        playlist_title: 'Synthetic Mix'
+                    }));
+                }
+            }
+        } 
+        // CASE 2: Playlist Discovery (Search)
+        else if (type === 'playlist') {
+            // We search for playlists. If the library's 'playlist' type is still buggy, 
+            // we use 'video' search with 'playlist' keyword as a bulletproof fallback.
+            try {
+                const results = await YouTube.search(query!, { limit: 15, type: 'playlist' });
+                tracks = results.map(p => ({
+                    id: p.id || '',
+                    title: p.title || 'Collection',
+                    artist: p.channel?.name || 'YouTube',
+                    thumbnail: p.thumbnail?.url || '',
+                    duration: 0,
+                    description: '',
+                    youtubeUrl: `https://www.youtube.com/playlist?list=${p.id}`,
+                    isPlaylist: true,
+                    playlist_title: p.title
+                }));
+            } catch (e) {
+                // Resilient fallback for Discovery
+                const rawResults = await YouTube.search(`${query} playlist`, { limit: 20, type: 'video' });
+                tracks = rawResults.map(v => ({
+                    id: v.id || '',
+                    title: v.title || 'Mix',
+                    artist: v.channel?.name || 'YouTube',
+                    thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+                    duration: 0,
+                    description: '',
+                    youtubeUrl: `https://www.youtube.com/playlist?list=${v.id}`,
+                    isPlaylist: true,
+                    playlist_title: v.title
+                }));
+            }
+        }
+        // CASE 3: Standard / Trending Search
+        else {
+            const results = await YouTube.search(type === 'trending' ? 'Billboard Hot 100 Official Audio' : query!, { 
+                limit: 30,
+                type: 'video'
+            }).catch(() => []);
+
+            tracks = results.map(v => ({
+                id: v.id || '',
                 title: v.title || 'Unknown',
                 artist: v.channel?.name || 'YouTube',
                 thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
                 duration: Math.floor((v.duration || 0) / 1000),
                 description: v.description || '',
-                youtubeUrl: isActuallyPlaylist 
-                    ? `https://www.youtube.com/playlist?list=${v.id}`
-                    : `https://www.youtube.com/watch?v=${v.id}`,
-                isPlaylist: isActuallyPlaylist,
-                playlist_title: isActuallyPlaylist ? v.title : undefined,
+                youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
+                isPlaylist: false,
                 album: type === 'trending' ? 'Trending' : 'Search Result'
-            } as YouTubeTrack;
-        }).filter((t): t is YouTubeTrack => t !== null);
+            }));
+        }
 
         if (tracks.length > 0) {
             await safeRedis.set(cacheKey, tracks, { ex: REDIS_TTL });
             searchCache.set(cacheKey, { data: tracks, timestamp: Date.now() });
-            return NextResponse.json({ items: tracks, query, type, source: 'live:resilient-v6' });
+            return NextResponse.json({ items: tracks, query, type, source: 'live:resilient-v8' });
         }
 
         return NextResponse.json({ items: [], query, type });
 
     } catch (error) {
-        console.error('Deep Search Error:', error);
-        return NextResponse.json({ 
-            items: [], 
-            error: 'No results found. Please try a different query.' 
-        });
+        console.error('Fatal Search Logic Error:', error);
+        return NextResponse.json({ items: [], error: 'Neural link unstable. Retrying...' });
     }
 }

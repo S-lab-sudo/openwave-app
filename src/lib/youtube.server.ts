@@ -52,10 +52,9 @@ function getBinaryPath(): string {
 
 /**
  * PRODUCTION-STABLE Search Logic
- * Using youtube-sr for reliable performance without external binaries.
  */
 export async function searchYouTubeTracksDirect(query: string): Promise<Track[]> {
-    const cacheKey = `tracks:v3:${query}`;
+    const cacheKey = `tracks:v4:${query}`;
     
     // 1. Redis Cache Check
     const cached = await safeRedis.get<Track[]>(cacheKey);
@@ -64,11 +63,11 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
     try {
         const results = await YouTube.search(query, { limit: 15, type: 'video' });
         const tracks = results.map(v => ({
-            id: v.id!,
-            title: v.title!,
+            id: v.id || '',
+            title: v.title || 'Unknown Title',
             artist: (v.channel?.name || 'Unknown Artist').replace(/ - Topic$/, '').trim(),
-            thumbnail: v.thumbnail?.url!,
-            duration: Math.floor(v.duration / 1000),
+            thumbnail: v.thumbnail?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+            duration: Math.floor((v.duration || 0) / 1000),
             youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
             album: 'Search Result'
         }));
@@ -78,38 +77,52 @@ export async function searchYouTubeTracksDirect(query: string): Promise<Track[]>
         }
         return tracks;
     } catch (e) {
-        console.error('YouTube-SR Search Direct Failed:', e);
+        console.error('YouTube-SR Search Direct Resilient Failed:', e);
         return [];
     }
 }
 
 /**
- * PRODUCTION-STABLE Playlist Search
+ * PRODUCTION-STABLE Playlist Search with Fallback logic
  */
 export async function searchYouTubePlaylistsDirect(query: string, limit: number = 5): Promise<Playlist[]> {
-    const cacheKey = `playlists:v3:${query}`;
+    const cacheKey = `playlists:v4:${query}`;
     
     // 1. Redis Cache Check
     const cached = await safeRedis.get<Playlist[]>(cacheKey);
     if (cached && cached.length > 0) return cached;
 
     try {
+        // Try native playlist search first
         const results = await YouTube.search(query, { limit, type: 'playlist' });
         const playlists = results.map(p => ({
-            id: p.id!,
-            title: p.title!,
+            id: p.id || '',
+            title: p.title || 'Untitled Playlist',
             description: `Curated collection by ${p.channel?.name || 'YouTube'}`,
-            coverUrl: p.thumbnail?.url!,
+            coverUrl: p.thumbnail?.url || '',
             tracks: []
         }));
 
         if (playlists.length > 0) {
             safeRedis.set(cacheKey, playlists, { ex: REDIS_TTL });
+            return playlists;
         }
-        return playlists;
-    } catch (e) {
-        console.error('YouTube-SR Playlist Search Direct Failed:', e);
         return [];
+    } catch (e) {
+        console.warn('Playlist Direct Search failed, falling back to video-search strategy', e);
+        // Resilient fallback
+        try {
+            const results = await YouTube.search(`${query} playlist`, { limit, type: 'video' });
+            return results.map(v => ({
+                id: v.id || '',
+                title: v.title || 'YouTube Mix',
+                description: `Collection including ${v.title}`,
+                coverUrl: v.thumbnail?.url || '',
+                tracks: []
+            }));
+        } catch (err) {
+            return [];
+        }
     }
 }
 

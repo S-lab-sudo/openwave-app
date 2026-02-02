@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import yts from 'yt-search';
+import YouTube from 'youtube-sr';
 import { safeRedis } from '@/lib/upstash';
 
 const searchCache = new Map<string, { data: YouTubeTrack[], timestamp: number }>();
@@ -28,7 +28,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Query parameter is required' }, { status: 400 });
     }
 
-    const cacheKey = `ow:search:v2:${type}:${query || 'global'}`;
+    const cacheKey = `ow:search:v3:${type}:${query || 'global'}`;
 
     // 1. Memory Cache
     const inMem = searchCache.get(cacheKey);
@@ -53,57 +53,43 @@ export async function GET(request: Request) {
                 return NextResponse.json({ items: billboardData, query, type, source: 'cache:billboard' });
             }
             
-            // Fallback: Search for trending mix using JS search
-            const r = await yts('Billboard Hot 100 Official Audio');
-            tracks = r.videos.slice(0, 15).map(v => ({
-                id: v.videoId,
-                title: v.title,
-                artist: v.author.name,
-                thumbnail: v.image,
-                duration: v.seconds,
-                description: v.description,
-                youtubeUrl: v.url,
+            // Fallback: Trending search via youtube-sr
+            const results = await YouTube.search('Billboard Hot 100 Official Audio', { limit: 15, type: 'video' });
+            tracks = results.map(v => ({
+                id: v.id!,
+                title: v.title!,
+                artist: v.channel?.name || 'Unknown Artist',
+                thumbnail: v.thumbnail?.url!,
+                duration: Math.floor(v.duration / 1000),
+                description: v.description || '',
+                youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
                 isPlaylist: false,
                 album: 'Trending'
             }));
         } else if (type === 'playlist') {
-            const r = await yts({ query: query + ' playlist', category: 'playlists' });
-            tracks = r.playlists.slice(0, 15).map(p => ({
-                id: p.listId,
-                title: p.title,
-                artist: p.author.name,
-                thumbnail: p.image,
+            const results = await YouTube.search(query!, { limit: 15, type: 'playlist' });
+            tracks = results.map(p => ({
+                id: p.id!,
+                title: p.title!,
+                artist: p.channel?.name || 'YouTube Curator',
+                thumbnail: p.thumbnail?.url!,
                 duration: 0,
                 description: '',
-                youtubeUrl: p.url,
+                youtubeUrl: `https://www.youtube.com/playlist?list=${p.id}`,
                 isPlaylist: true,
                 playlist_title: p.title
             }));
-        } else if (type === 'playlist_tracks') {
-            // yt-search doesn't retrieve all tracks in a playlist easily by ID alone, 
-            // but for dynamic mixes, we usually search for the query and pick videos.
-            const r = await yts(query!);
-            tracks = r.videos.slice(0, 20).map(v => ({
-                id: v.videoId,
-                title: v.title,
-                artist: v.author.name,
-                thumbnail: v.image,
-                duration: v.seconds,
-                description: v.description,
-                youtubeUrl: v.url,
-                isPlaylist: false
-            }));
         } else {
             // Standard Search
-            const r = await yts(query!);
-            tracks = r.videos.slice(0, 20).map(v => ({
-                id: v.videoId,
-                title: v.title,
-                artist: v.author.name,
-                thumbnail: v.image,
-                duration: v.seconds,
-                description: v.description,
-                youtubeUrl: v.url,
+            const results = await YouTube.search(query!, { limit: 20, type: 'video' });
+            tracks = results.map(v => ({
+                id: v.id!,
+                title: v.title!,
+                artist: v.channel?.name || 'Unknown Artist',
+                thumbnail: v.thumbnail?.url!,
+                duration: Math.floor(v.duration / 1000),
+                description: v.description || '',
+                youtubeUrl: `https://www.youtube.com/watch?v=${v.id}`,
                 isPlaylist: false,
                 album: 'Search Result'
             }));
@@ -112,13 +98,13 @@ export async function GET(request: Request) {
         if (tracks.length > 0) {
             await safeRedis.set(cacheKey, tracks, { ex: REDIS_TTL });
             searchCache.set(cacheKey, { data: tracks, timestamp: Date.now() });
-            return NextResponse.json({ items: tracks, query, type, source: 'live:js-search' });
+            return NextResponse.json({ items: tracks, query, type, source: 'live:sr-search' });
         }
 
         return NextResponse.json({ items: [], query, type });
 
     } catch (error) {
-        console.error('JS Search Error:', error);
-        return NextResponse.json({ items: [], error: 'Search synthesis failed' }, { status: 500 });
+        console.error('YouTube-SR Search Error:', error);
+        return NextResponse.json({ items: [], error: 'Search failed in production environment' }, { status: 500 });
     }
 }

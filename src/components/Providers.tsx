@@ -11,19 +11,19 @@ export function Providers({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         // Initial session check
-        supabase.auth.getSession().then(({ data: { session } }) => {
+        supabase.auth.getSession().then(({ data: { session } }: any) => {
             if (session) {
                 setSession(session);
             } else {
                 // Anonymous sign-in for guest users
-                supabase.auth.signInAnonymously().then(({ data: { session } }) => {
+                supabase.auth.signInAnonymously().then(({ data: { session } }: any) => {
                     setSession(session);
                 });
             }
         });
 
         // Listen for auth changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
             setSession(session);
         });
 

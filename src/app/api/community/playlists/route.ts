@@ -22,7 +22,16 @@ export async function GET(request: Request) {
                 return NextResponse.json({ error: error.message }, { status: 500 });
             }
 
-            return NextResponse.json({ item: data });
+            // ROOT FIX: Ensure single item fetch also uses camelCase formatting
+            const item = data ? {
+                id: (data as any).id,
+                title: (data as any).title,
+                description: (data as any).description || '',
+                coverUrl: (data as any).cover_url, // snake_case to camelCase
+                upvotes: (data as any).upvote_count,
+            } : null;
+
+            return NextResponse.json({ item });
         }
 
         let query = supabase

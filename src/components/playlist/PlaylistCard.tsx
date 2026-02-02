@@ -17,17 +17,18 @@ interface PlaylistCardProps {
   onPlay?: () => void;
 }
 
-export function PlaylistCard({
-  id,
-  title,
-  description,
-  coverUrl,
-  trackCount,
-  isPublic = true,
-  showPrivacy = true,
-  className,
-  onPlay,
-}: PlaylistCardProps) {
+export function PlaylistCard(props: PlaylistCardProps) {
+  const {
+    id,
+    title,
+    description,
+    coverUrl,
+    trackCount,
+    isPublic = true,
+    showPrivacy = true,
+    className,
+    onPlay,
+  } = props;
   const handlePlayClick = (e: React.MouseEvent) => {
     if (onPlay) {
       e.preventDefault();
@@ -48,9 +49,9 @@ export function PlaylistCard({
       <Link href={onPlay ? "#" : `/playlist/${id}`} scroll={!onPlay} className="block h-full flex flex-col" onClick={onPlay ? handlePlayClick : undefined}>
         {/* Cover Image Container */}
         <div className="relative aspect-square rounded-lg overflow-hidden mb-3.5 shadow-2xl bg-[#0d0d0d] flex items-center justify-center border border-white-[0.02]">
-          {coverUrl && !coverUrl.includes('unsplash.com/photo-1470225620780-dba8ba36b745') ? (
+          {(coverUrl || (props as any).cover_url) && !(coverUrl || (props as any).cover_url).includes('unsplash.com/photo-1470225620780-dba8ba36b745') ? (
             <img
-              src={coverUrl}
+              src={coverUrl || (props as any).cover_url}
               alt={title}
               className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
             />

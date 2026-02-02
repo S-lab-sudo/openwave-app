@@ -38,7 +38,18 @@ export async function GET(request: Request) {
             isPublic: p.is_public ?? true,
             tracks: (p.playlist_tracks || [])
                 .sort((a, b) => a.position - b.position)
-                .map(pt => pt.tracks as SupabaseTrack)
+                .map(pt => {
+                    const t = pt.tracks as unknown as SupabaseTrack;
+                    if (!t) return null;
+                    return {
+                        id: t.track_id,
+                        title: t.title,
+                        artist: t.artist,
+                        thumbnail: t.thumbnail_url, // ROOT FIX: Map thumbnail_url to thumbnail
+                        duration: t.duration,
+                        album: 'Collection'
+                    } as Track;
+                })
                 .filter(t => t !== null)
         }));
 

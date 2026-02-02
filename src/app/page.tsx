@@ -2,52 +2,33 @@
 
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, TrendingUp, Music, Heart, Zap, Disc, Loader2, ListPlus, Sparkles, RefreshCw } from 'lucide-react';
+import { Play, TrendingUp, Music, Heart, Zap, Disc, Loader2, ListPlus, Sparkles, RefreshCw, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, formatDuration } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SearchInput } from '@/components/ui/search-input';
 import { PlaylistCard } from '@/components/playlist/PlaylistCard';
 import { useEffect, useState, useRef } from 'react';
-import { getTrendingTracks } from '@/lib/youtube';
+import { getTrendingTracks, getDynamicEditorsPicks } from '@/lib/youtube';
 import { usePlayerStore, Track } from '@/store/usePlayerStore';
 import { TrackRow } from '@/components/playlist/TrackRow';
-import { useContentStore } from '@/store/useContentStore';
+import { useContentStore, DynamicPlaylist } from '@/store/useContentStore';
 import { useSearchStore } from '@/store/useSearchStore';
-import { CommunityPlaylistEntry, SupabasePlaylist } from '@/types/database';
 
 export default function Home() {
   const router = useRouter();
   const { playTrack } = usePlayerStore();
-  const { editorsPicks, setEditorsPicks, lastFetched, setLastFetched, likedPlaylists } = useContentStore();
+  const { editorsPicks, setEditorsPicks, lastFetched, setLastFetched } = useContentStore();
 
   const [trendingTracks, setTrendingTracks] = useState<Track[]>([]);
   const [recommendedTracks, setRecommendedTracks] = useState<Track[]>([]);
-  const [communityPlaylists, setCommunityPlaylists] = useState<CommunityPlaylistEntry[]>([]);
-  const [curatedPlaylists, setCuratedPlaylists] = useState<SupabasePlaylist[]>([]);
+  const [communityPlaylists, setCommunityPlaylists] = useState<DynamicPlaylist[]>([]);
   const [visibleTracks, setVisibleTracks] = useState(5);
   const [isLoading, setIsLoading] = useState(true);
   const [isFetchingCommunity, setIsFetchingCommunity] = useState(false);
-  const [isRefreshingRecs, setIsRefreshingRecs] = useState(false);
   const { query: globalSearchQuery, setQuery: setGlobalSearchQuery } = useSearchStore();
   const [homeSearch, setHomeSearch] = useState('');
-  const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const hasLoaded = useRef(false);
-
-  const MOODS = [
-    { name: 'Chill', query: 'Chill Lo-fi Vibes' },
-    { name: 'Energetic', query: 'High Energy Pop Workout' },
-    { name: 'Happy', query: 'Feel Good Summer Hits' },
-    { name: 'Focus', query: 'Deep Focus Ambient Piano' },
-    { name: 'Sad', query: 'Late Night Melancholy' },
-    { name: 'Party', query: 'Global Party Anthems' },
-    { name: 'Romance', query: 'Romantic Acoustic Ballads' },
-    { name: 'Study', query: 'Academic Focus Lo-fi' },
-    { name: 'Gym', query: 'Heavy Metal Gym Pump' },
-    { name: 'Nature', query: 'Nature Sounds Ambient' },
-    { name: 'Retro', query: '80s Synthwave Hits' },
-    { name: 'Jazz', query: 'Smooth Midnight Jazz' },
-  ];
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -62,7 +43,8 @@ export default function Home() {
         await Promise.allSettled([
           getTrendingTracks('US').then(tracks => setTrendingTracks(tracks)),
           fetchCommunityPlaylists(),
-          refreshCuratedPlaylists()
+          fetchPersonalizedHistory(),
+          fetchNeuralMixes()
         ]);
       } catch (error) {
         console.error('Failed to fetch data', error);
@@ -77,7 +59,7 @@ export default function Home() {
     setIsFetchingCommunity(true);
     try {
       const res = await fetch('/api/community/playlists');
-      const data = await res.json() as { items: CommunityPlaylistEntry[] };
+      const data = await res.json();
       setCommunityPlaylists(data.items || []);
     } catch (error) {
       console.error("Failed to fetch community playlists", error);
@@ -86,33 +68,28 @@ export default function Home() {
     }
   };
 
-  const refreshCuratedPlaylists = async () => {
+  const fetchPersonalizedHistory = async () => {
     try {
-      const response = await fetch('/api/taste/playlists');
-      const data = await response.json() as { items: SupabasePlaylist[] };
-      setCuratedPlaylists(data.items || []);
+      const res = await fetch('/api/taste/recommend');
+      const data = await res.json();
+      if (data.items) setRecommendedTracks(data.items);
     } catch (e) {
-      console.error("Failed to fetch playlists", e);
+      console.warn("Recommendations skipped", e);
     }
   };
 
-  const refreshRecommendedTracks = async (moodQuery?: string) => {
-    setIsRefreshingRecs(true);
+  const fetchNeuralMixes = async () => {
     try {
-      const endpoint = moodQuery ? `/api/search?q=${encodeURIComponent(moodQuery)}` : '/api/search?q=Top Hits 2024';
-      const response = await fetch(endpoint);
-      const data = await response.json() as { items: Track[] };
-      setRecommendedTracks(data.items || []);
-    } catch (error) {
-      console.error("Failed to refresh recommendations", error);
-    } finally {
-      setIsRefreshingRecs(false);
+      // Use cached picks if fresh (within 1 hour)
+      if (editorsPicks.length > 0 && Date.now() - lastFetched < 1000 * 60 * 60) {
+        return;
+      }
+      const picks = await getDynamicEditorsPicks();
+      setEditorsPicks(picks);
+      setLastFetched(Date.now());
+    } catch (e) {
+      console.error("Failed to fetch Neural Mixes", e);
     }
-  };
-
-  const handleMoodSelect = (mood: { name: string, query: string }) => {
-    setSelectedMood(mood.name);
-    refreshRecommendedTracks(mood.query);
   };
 
   const handleSearchSubmit = (value: string) => {
@@ -125,22 +102,6 @@ export default function Home() {
   const handleLoadMore = () => {
     setVisibleTracks(prev => Math.min(prev + 10, trendingTracks.length));
   };
-
-  useEffect(() => {
-    const handleHotRefresh = () => {
-      console.log("Hot Refresh Triggered: Syncing Home Metadata...");
-      setIsLoading(true);
-      fetchCommunityPlaylists();
-      refreshCuratedPlaylists();
-      getTrendingTracks('US').then(tracks => {
-        setTrendingTracks(tracks);
-        setIsLoading(false);
-      });
-    };
-
-    window.addEventListener('openwave-hot-refresh', handleHotRefresh);
-    return () => window.removeEventListener('openwave-hot-refresh', handleHotRefresh);
-  }, []);
 
   return (
     <div className="min-h-screen bg-[#070707]">
@@ -187,12 +148,31 @@ export default function Home() {
       </section>
 
       <div className="container mx-auto px-8 py-20 space-y-32">
+        {/* Neural Mixes - Curated by Vibe */}
+        {editorsPicks.length > 0 && (
+          <section className="space-y-10">
+            <div className="space-y-1">
+              <h2 className="text-xl font-black text-white flex items-center gap-2.5 tracking-tight">
+                <Layers className="w-6 h-6 text-white" fill="currentColor" /> Neural Recommendations
+              </h2>
+              <p className="text-[#444444] text-[9px] font-black uppercase tracking-[0.25em]">Algorithmic frequency synthesis</p>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-8">
+              {editorsPicks.map((playlist, index) => (
+                <motion.div key={playlist.id} initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: index * 0.1 }}>
+                  <PlaylistCard {...playlist} showPrivacy={false} />
+                </motion.div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Most Favorite Playlists */}
         <section className="space-y-10">
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <h2 className="text-xl font-black text-white flex items-center gap-2.5 tracking-tight">
-                <Heart className="w-6 h-6 text-white" fill="currentColor" /> Most Favorite Playlists
+                <Heart className="w-6 h-6 text-white" fill="currentColor" /> Community Favorites
               </h2>
               <p className="text-[#444444] text-[9px] font-black uppercase tracking-[0.25em]">Voted by the OpenWave community</p>
             </div>
@@ -203,22 +183,9 @@ export default function Home() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-8">
             {communityPlaylists.length > 0 ? communityPlaylists.map((playlist, index) => (
               <motion.div key={playlist.id} initial={{ opacity: 0, scale: 0.9 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true }} transition={{ delay: index * 0.1 }}>
-                <PlaylistCard id={playlist.id} title={playlist.title} description={playlist.description} coverUrl={playlist.cover_url} isPublic={true} showPrivacy={false} trackCount={playlist.upvote_count} />
+                <PlaylistCard {...playlist} isPublic={true} showPrivacy={false} />
               </motion.div>
             )) : <div className="col-span-full py-20 text-center text-[#222222]">No community favorites yet.</div>}
-          </div>
-        </section>
-
-        {/* Recommendations Section */}
-        <section className="space-y-6">
-          <div className="space-y-1">
-            <h2 className="text-xl font-black text-white flex items-center gap-2.5 tracking-tight">
-              <Sparkles className="w-6 h-6 text-white" fill="currentColor" /> Recommendations
-            </h2>
-            <p className="text-[#444444] text-[9px] font-black uppercase tracking-[0.25em]">Personalized for you</p>
-          </div>
-          <div className="py-20 border border-white/5 rounded-3xl bg-white/[0.01] flex items-center justify-center">
-            <p className="text-xs font-black uppercase tracking-[0.3em] text-[#222222] animate-pulse">Coming Soon......</p>
           </div>
         </section>
 

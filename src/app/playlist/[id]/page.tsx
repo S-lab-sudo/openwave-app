@@ -200,13 +200,21 @@ export default function PlaylistView() {
         }
 
         if (found) {
-            setPlaylist(found);
-            setEditTitle(found.title);
-            setEditDesc(found.description || '');
+            // Senior Engineer Move: Normalize legacy or mismatched property names
+            const normalized: Playlist = {
+                ...found,
+                title: found.title || (found as any).name || 'Untitled Mix',
+                coverUrl: found.coverUrl || (found as any).cover_url || '',
+                tracks: found.tracks || [],
+                trackCount: found.tracks?.length || found.trackCount || 0
+            };
+            setPlaylist(normalized);
+            setEditTitle(normalized.title);
+            setEditDesc(normalized.description || '');
         } else if (id && id.toString().startsWith('PL')) {
             fetchDynamicPlaylist(id as string);
         } else {
-            setPlaylist(null); // No fallback to featured[0], show nothing or handle error
+            setPlaylist(null);
         }
     }, [id, editorsPicks, storedUserPlaylists]);
 

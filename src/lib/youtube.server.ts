@@ -7,7 +7,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { safeRedis } from './upstash';
-import youtubedl from 'youtube-dl-exec';
+import yts from 'yt-search';
 
 export interface Track {
     id: string;
@@ -27,205 +27,93 @@ export interface Playlist {
     tracks: Track[];
 }
 
-interface YouTubeRawData {
-    id: string;
-    title?: string;
-    uploader?: string;
-    channel?: string;
-    duration?: number;
-    thumbnail?: string;
-    description?: string;
-    thumbnails?: { url: string }[];
-    _type?: string;
-}
-
 const REDIS_TTL = 60 * 60 * 24; // 24 hours
 
 /**
- * Advanced Binary Resolver for Cross-Platform Stability (Windows/Linux/Production)
+ * Advanced Binary Resolver for Cross-Platform Stability (FOR DOWNLOADS ONLY)
  */
 function getBinaryPath(): string {
     const isWindows = process.platform === 'win32';
     const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
     
     // Check local project bin
-    const projectBin = path.join(process.cwd(), 'bin', binaryName);
-    if (fs.existsSync(projectBin)) return projectBin;
+    const root = process.cwd();
+    const possiblePaths = [
+        path.join(root, 'bin', binaryName),
+        path.join(root, 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
+    ];
 
-    // Check node_modules/youtube-dl-exec version
-    // On Vercel, the binary is sometimes placed here
-    const moduleBin = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', binaryName);
-    if (fs.existsSync(moduleBin)) return moduleBin;
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) return p;
+    }
 
-    // Last resort: hope it's in the global PATH
     return binaryName; 
 }
 
 /**
- * Server-side search function that uses yt-dlp directly.
- * Use this in API routes only.
+ * PRODUCTION-STABLE Search Logic
+ * Replaced python dependent scraper with JS engine.
  */
 export async function searchYouTubeTracksDirect(query: string): Promise<Track[]> {
-    const cacheKey = `tracks:${query}`;
+    const cacheKey = `tracks:v2:${query}`;
     
     // 1. Redis Cache Check
     const cached = await safeRedis.get<Track[]>(cacheKey);
     if (cached && cached.length > 0) return cached;
 
-    const ytDlpPath = getBinaryPath();
+    try {
+        const r = await yts(query);
+        const tracks = r.videos.slice(0, 15).map(v => ({
+            id: v.videoId,
+            title: v.title,
+            artist: v.author.name.replace(/ - Topic$/, '').trim(),
+            thumbnail: v.image,
+            duration: v.seconds,
+            youtubeUrl: v.url,
+            album: 'Search Result'
+        }));
 
-    return new Promise((resolve) => {
-        const args = [
-            `ytsearch10:${query}`,
-            '--dump-json',
-            '--flat-playlist',
-            '--no-playlist'
-        ];
-
-        let proc;
-        try {
-            // shell: true is critical for Windows paths with spaces or special characters
-            proc = spawn(ytDlpPath, args, { shell: process.platform === 'win32' });
-        } catch (e) {
-            console.error('Failed to spawn yt-dlp:', e);
-            return resolve([]);
+        if (tracks.length > 0) {
+            safeRedis.set(cacheKey, tracks, { ex: REDIS_TTL });
         }
-
-        let output = '';
-
-        proc.stdout.on('data', (data: Buffer) => {
-            output += data.toString();
-        });
-
-        proc.on('error', (err: any) => {
-            console.error(`yt-dlp spawn error (${ytDlpPath}):`, err.message);
-            resolve([]);
-        });
-
-        proc.on('close', (code: number) => {
-            if (code !== 0) {
-                return resolve([]);
-            }
-
-            try {
-                const lines = output.trim().split('\n');
-                const tracks = lines.map((line): Track | null => {
-                    if (!line.trim()) return null;
-                    try {
-                        const json = JSON.parse(line) as YouTubeRawData;
-
-                        // FILTER: Exclude long videos (Mixes/Compilations > 12 mins)
-                        const duration = Math.floor(json.duration || 0);
-                        if (duration > 720) return null;
-
-                        return {
-                            id: json.id,
-                            title: json.title || 'Unknown Title',
-                            artist: (json.uploader || json.channel || 'Unknown Artist').replace(/ - Topic$/, '').trim(),
-                            thumbnail: json.thumbnail || `https://i.ytimg.com/vi/${json.id}/hqdefault.jpg`,
-                            duration: duration,
-                            youtubeUrl: `https://www.youtube.com/watch?v=${json.id}`,
-                            album: 'Search Result'
-                        };
-                    } catch {
-                        return null;
-                    }
-                }).filter((t): t is Track => t !== null);
-
-                if (tracks.length > 0) {
-                    safeRedis.set(cacheKey, tracks, { ex: REDIS_TTL });
-                }
-                resolve(tracks);
-            } catch {
-                resolve([]);
-            }
-        });
-
-        setTimeout(() => {
-            if (proc.exitCode === null) {
-                proc.kill();
-                resolve([]);
-            }
-        }, 15000);
-    });
+        return tracks;
+    } catch (e) {
+        console.error('JS Search Direct Failed:', e);
+        return [];
+    }
 }
 
 /**
- * Search for YouTube playlists directly using yt-dlp.
- * Returns curated playlists based on search query.
+ * PRODUCTION-STABLE Playlist Search
  */
 export async function searchYouTubePlaylistsDirect(query: string, limit: number = 5): Promise<Playlist[]> {
-    const cacheKey = `playlists:${query}`;
+    const cacheKey = `playlists:v2:${query}`;
     
     // 1. Redis Cache Check
     const cached = await safeRedis.get<Playlist[]>(cacheKey);
     if (cached && cached.length > 0) return cached;
 
-    const ytDlpPath = getBinaryPath();
+    try {
+        const r = await yts({ query: query + ' playlist', category: 'playlists' });
+        const playlists = r.playlists.slice(0, limit).map(p => ({
+            id: p.listId,
+            title: p.title,
+            description: `Curated collection by ${p.author.name}`,
+            coverUrl: p.image,
+            tracks: []
+        }));
 
-    return new Promise((resolve) => {
-        const args = [
-            `ytsearchplaylist${limit}:${query} playlist`,
-            '--dump-json',
-            '--flat-playlist'
-        ];
-
-        let proc;
-        try {
-            proc = spawn(ytDlpPath, args, { shell: process.platform === 'win32' });
-        } catch (e) {
-            console.error('Failed to spawn yt-dlp:', e);
-            return resolve([]);
+        if (playlists.length > 0) {
+            safeRedis.set(cacheKey, playlists, { ex: REDIS_TTL });
         }
-
-        let output = '';
-
-        proc.stdout.on('data', (data: Buffer) => {
-            output += data.toString();
-        });
-        
-        proc.on('error', (err: any) => {
-            console.error(`yt-dlp spawn error (${ytDlpPath}):`, err.message);
-            resolve([]);
-        });
-
-        proc.on('close', (code: number) => {
-            if (code !== 0) {
-                return resolve([]);
-            }
-
-            try {
-                const lines = output.trim().split('\n');
-                const playlists = lines.map((line): Playlist | null => {
-                    if (!line.trim()) return null;
-                    try {
-                        const json = JSON.parse(line) as YouTubeRawData;
-                        return {
-                            id: json.id,
-                            title: json.title || 'Untitled Playlist',
-                            description: json.description?.substring(0, 200) || `Curated playlist by ${json.uploader || 'YouTube'}`,
-                            coverUrl: json.thumbnail || json.thumbnails?.[0]?.url || '',
-                            tracks: [] // Tracks can be loaded when playlist is opened
-                        };
-                    } catch {
-                        return null;
-                    }
-                }).filter((p): p is Playlist => p !== null);
-
-                if (playlists.length > 0) {
-                    safeRedis.set(cacheKey, playlists, { ex: REDIS_TTL });
-                }
-                resolve(playlists);
-            } catch {
-                resolve([]);
-            }
-        });
-
-        setTimeout(() => {
-            if (proc.exitCode === null) {
-                proc.kill();
-                resolve([]);
-            }
-        }, 15000);
-    });
+        return playlists;
+    } catch (e) {
+        console.error('JS Playlist Search Direct Failed:', e);
+        return [];
+    }
 }
+
+/**
+ * EXPORT BINARY RESOLVER FOR DOWNLAODS
+ */
+export { getBinaryPath };

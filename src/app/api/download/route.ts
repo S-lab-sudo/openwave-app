@@ -3,26 +3,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-
-/**
- * Advanced Binary Resolver for Cross-Platform Stability
- */
-function getBinaryPath(): string {
-    const isWindows = process.platform === 'win32';
-    const binaryName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
-    
-    const root = process.cwd();
-    const possiblePaths = [
-        path.join(root, 'bin', binaryName),
-        path.join(root, 'node_modules', 'youtube-dl-exec', 'bin', binaryName),
-    ];
-
-    for (const p of possiblePaths) {
-        if (fs.existsSync(p)) return p;
-    }
-
-    return binaryName; // Fallback to global
-}
+import { getBinaryPath } from '@/lib/youtube.server';
 
 export async function POST(request: Request) {
     try {
@@ -88,6 +69,9 @@ export async function POST(request: Request) {
             '--no-warnings'
         ];
 
+        // LOGGING FOR PRODUCTION TROUBLESHOOTING
+        console.log(`[Download API] Executing via: ${ytDlpPath}`);
+        
         const downloadProcess = spawn(ytDlpPath, args, { shell: isWindows });
         let errorMessage = '';
 
@@ -102,7 +86,7 @@ export async function POST(request: Request) {
 
             downloadProcess.on('close', (code) => {
                 if (code === 0) resolve(true);
-                else reject(new Error(`yt-dlp engine failed with code ${code}: ${errorMessage}`));
+                else reject(new Error(`yt-dlp download failed with code ${code}: ${errorMessage}`));
             });
         });
 
